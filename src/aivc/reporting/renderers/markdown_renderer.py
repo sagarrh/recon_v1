@@ -15,6 +15,10 @@ def _points(value: float | int | None) -> str:
     return "—" if value is None else f"{float(value):+.2f}pp"
 
 
+def _sov(value: float | int | None) -> str:
+    return "—" if value is None else f"{float(value):.2f}%"
+
+
 def render_markdown(snapshot: FinalReportSnapshot) -> str:
     snapshot.verify_checksum()
     template_text = files("aivc.resources").joinpath(
@@ -23,4 +27,5 @@ def render_markdown(snapshot: FinalReportSnapshot) -> str:
     environment = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
     environment.filters["percent"] = _percent
     environment.filters["points"] = _points
+    environment.filters["sov"] = _sov
     return environment.from_string(template_text).render(report=snapshot) + "\n"

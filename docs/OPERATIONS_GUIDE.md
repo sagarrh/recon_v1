@@ -228,9 +228,22 @@ when two database clients share the same display name:
 uv run aivc report generate --client-id "CLIENT-UUID" --profile decision
 ```
 
-Use `--profile detailed` for expanded provider, finding, action, and evidence
-limits. The underlying measurements and publication filters are identical in
-both profiles. The default is controlled by `config/reporting.toml`, or by:
+Use `--profile detailed` for full SOV company tables and history, query-level
+visibility, expanded citation and Recon findings, recommendations, run history,
+methodology, and evidence appendices. The decision profile deliberately keeps a
+smaller rendered view. The underlying measurements and publication filters are
+identical in both profiles.
+
+Final-report generation runs a packaged, parameterized version of
+`recon_query_for_report.sql` using the exact client UUID, reporting week, and
+configured history window. That query is executed after `SET TRANSACTION READ
+ONLY`; it fetches data and cannot modify the database. The complete result is
+stored as `recon_reporting` in the structured JSON snapshot. HTML and Markdown
+render useful sections from that payload rather than dumping the raw object.
+NOISE-classified rows remain in the structured payload for audit but are not
+shown as client findings.
+
+The default profile is controlled by `config/reporting.toml`, or by:
 
 ```dotenv
 AIVC_REPORT_PROFILE=decision
@@ -262,8 +275,12 @@ uv run aivc report validate --path "output/aprio/final-report.json"
 uv run aivc report render --parent-run-id "PARENT-UUID" --profile detailed --allow-partial
 ```
 
-Historical rendering reads only the source bundles attached to that parent run;
-it never substitutes newer Citation or Recon data.
+Historical rendering always reads the Citation and producer bundles attached to
+that parent run. If the parent already has a schema 1.1 report snapshot, it also
+reuses that snapshot's exact full Recon reporting payload. For an older parent
+that predates schema 1.1, the renderer performs one read-only reconstruction
+bounded to the parent's reporting week, then persists it for deterministic
+future rerenders.
 
 ## 10. Database safety
 

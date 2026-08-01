@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 from uuid import UUID
 
@@ -85,9 +87,26 @@ def mark_final_report_failed(
 def _snapshot_from_row(row: dict[str, Any] | None) -> FinalReportSnapshot | None:
     if row is None or row.get("structured_snapshot") is None:
         return None
-    snapshot = FinalReportSnapshot.model_validate(row["structured_snapshot"])
-    snapshot.verify_checksum()
-    return snapshot
+    payload = row["structured_snapshot"]
+    if not isinstance(payload, dict):
+        raise ValueError("stored final report snapshot must be a JSON object")
+    expected = payload.get("checksum")
+    canonical = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"checksum", "generated_at"}
+    }
+    actual = hashlib.sha256(
+        json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    if not expected or expected != actual:
+        raise ValueError("stored final report snapshot checksum is missing or invalid")
+    return FinalReportSnapshot.model_validate(payload)
 
 
 def load_final_report_by_parent(

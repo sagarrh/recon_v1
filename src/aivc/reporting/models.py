@@ -122,6 +122,25 @@ class ProviderPerformance(StrictReportModel):
     metrics: list[ReportMetric] = Field(default_factory=list)
 
 
+class SovCompanyPosition(StrictReportModel):
+    company_name: str
+    sov: float
+    rank: int | None = None
+    is_client: bool = False
+    is_tracked: bool = False
+
+
+class SovHistoryPoint(StrictReportModel):
+    week_date: str
+    company_name: str
+    sov: float
+    is_client: bool = False
+    delta_pp: float | None = None
+    alert_flag: str | None = None
+    answers_analyzed: int | None = None
+    platforms: list[str] = Field(default_factory=list)
+
+
 class TopicPerformance(StrictReportModel):
     cluster_id: str
     cluster_label: str
@@ -129,7 +148,79 @@ class TopicPerformance(StrictReportModel):
     current_client_sov: float | None = None
     provider_count: int = Field(default=0, ge=0)
     query_count: int = Field(default=0, ge=0)
+    as_of_week: str | None = None
+    client_rank: int | None = None
+    market_size: int = Field(default=0, ge=0)
+    leader_name: str | None = None
+    leader_sov: float | None = None
+    gap_to_leader: float | None = None
+    positions: list[SovCompanyPosition] = Field(default_factory=list)
+    history: list[SovHistoryPoint] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class QueryPerformance(StrictReportModel):
+    monitor_query_key: str
+    query: str
+    provider: str
+    method: str | None = None
+    cluster_id: str | None = None
+    cluster_name: str | None = None
+    current_visibility: float | None = None
+    latest_delta: float | None = None
+    trend: str
+    run_count: int = Field(default=0, ge=0)
+
+
+class ReconSignalView(StrictReportModel):
+    signal_id: str
+    cluster_id: str | None = None
+    cluster_name: str | None = None
+    week_date: str | None = None
+    severity: str | None = None
+    competitor: str | None = None
+    competitor_delta_pp: float | None = None
+    evidence_summary: str | None = None
+
+
+class ReconRecommendationView(StrictReportModel):
+    recommendation_id: str
+    cluster_id: str | None = None
+    cluster_name: str | None = None
+    competitor: str | None = None
+    priority: str | None = None
+    confidence: str | None = None
+    summary: str | None = None
+    probable_cause: str | None = None
+    gap_analysis: str | None = None
+    actions: list[str] = Field(default_factory=list)
+    timeline: str | None = None
+
+
+class ReconRunHistory(StrictReportModel):
+    run_id: str
+    status: str
+    sync_date: str | None = None
+    started_at: datetime | None = None
+    triggers_fired: int = Field(default=0, ge=0)
+
+
+class ExcludedTopic(StrictReportModel):
+    cluster_id: str | None = None
+    cluster_name: str
+    reason: str
+
+
+class ReconReportingPayload(StrictReportModel):
+    """Complete, lossless result of the packaged Recon reporting SQL."""
+
+    client: dict[str, Any]
+    clusters: list[dict[str, Any]]
+    sov: dict[str, Any]
+    signals: list[dict[str, Any]]
+    executive_summary: str | None = None
+    recommendations: list[dict[str, Any]]
+    run_history: list[dict[str, Any]]
 
 
 class EvidenceIndexItem(StrictReportModel):
@@ -157,7 +248,9 @@ class ReportConfigMetadata(StrictReportModel):
 
 
 class FinalReportSnapshot(StrictReportModel):
-    schema_version: Literal["1.0"] = "1.0"
+    # 1.0 remains readable so historical reports can be upgraded in place.
+    # New snapshots always use 1.1 and the current JSON Schema only accepts 1.1.
+    schema_version: Literal["1.0", "1.1"] = "1.1"
     report_id: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
     parent_run_id: UUID
@@ -172,6 +265,12 @@ class FinalReportSnapshot(StrictReportModel):
     executive_metrics: list[ReportMetric] = Field(default_factory=list)
     provider_summary: list[ProviderPerformance] = Field(default_factory=list)
     topic_summary: list[TopicPerformance] = Field(default_factory=list)
+    query_details: list[QueryPerformance] = Field(default_factory=list)
+    recon_signals: list[ReconSignalView] = Field(default_factory=list)
+    recon_recommendations: list[ReconRecommendationView] = Field(default_factory=list)
+    recon_run_history: list[ReconRunHistory] = Field(default_factory=list)
+    excluded_topics: list[ExcludedTopic] = Field(default_factory=list)
+    recon_reporting: ReconReportingPayload | None = None
     decision_cards: list[DecisionCard] = Field(default_factory=list)
     consolidated_actions: list[RecommendedAction] = Field(default_factory=list)
     data_quality_flags: list[str] = Field(default_factory=list)

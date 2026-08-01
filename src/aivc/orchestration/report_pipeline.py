@@ -9,11 +9,13 @@ from ai_visibility.config.settings import Settings
 from ai_visibility.database.migrations import apply_migrations
 from aivc.config.settings import AivcSettings
 from aivc.database.final_reports import (
+    load_final_report_by_parent,
     load_signal_bundles_for_parent,
     mark_final_report_failed,
     persist_final_report,
 )
 from aivc.database.orchestration import finish_pipeline_run, set_stage
+from aivc.database.recon_reporting import load_recon_reporting_payload
 from aivc.reporting.artifacts import (
     refresh_latest_artifacts,
     write_final_report_artifacts,
@@ -124,12 +126,24 @@ def run_final_report_pipeline(
 
         current_stage = "decision_cards"
         set_stage(settings, parent_run_id, current_stage, "running")
+        report_week = (
+            integrated.combined_bundle.analysis_period.end.date()
+            if integrated.combined_bundle.analysis_period.end
+            else None
+        )
+        recon_reporting = load_recon_reporting_payload(
+            settings,
+            client_id=integrated.combined_bundle.client.client_id,
+            report_week=report_week,
+            history_weeks=config.profile_settings.history_weeks,
+        )
         snapshot = build_final_report_snapshot(
             parent_run_id=parent_run_id,
             citation_report=integrated.citation_report,
             citation_bundle=integrated.citation_bundle,
             recon_bundle=integrated.recon_bundle,
             combined_bundle=integrated.combined_bundle,
+            recon_reporting=recon_reporting,
             config=config,
         )
         snapshot = ReuseValidatedNarrative().enrich(snapshot)
@@ -241,12 +255,33 @@ def render_historical_report(
         None,
     )
     citation_report = _citation_report_from_bundle(reference.json_path if reference else None)
+    previous_snapshot = load_final_report_by_parent(settings, parent_run_id)
+    if (
+        previous_snapshot is not None
+        and previous_snapshot.recon_reporting is not None
+        and previous_snapshot.config.effective_profile.history_weeks
+        >= config.profile_settings.history_weeks
+    ):
+        recon_reporting = previous_snapshot.recon_reporting.model_dump(mode="json")
+    else:
+        report_week = (
+            bundles["aivc_combined"].analysis_period.end.date()
+            if bundles["aivc_combined"].analysis_period.end
+            else None
+        )
+        recon_reporting = load_recon_reporting_payload(
+            settings,
+            client_id=bundles["aivc_combined"].client.client_id,
+            report_week=report_week,
+            history_weeks=config.profile_settings.history_weeks,
+        )
     snapshot = build_final_report_snapshot(
         parent_run_id=parent_run_id,
         citation_report=citation_report,
         citation_bundle=citation,
         recon_bundle=bundles["scout"],
         combined_bundle=bundles["aivc_combined"],
+        recon_reporting=recon_reporting,
         config=config,
     )
     snapshot = ReuseValidatedNarrative().enrich(snapshot)

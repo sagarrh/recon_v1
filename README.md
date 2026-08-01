@@ -116,11 +116,21 @@ output/aprio/recon-signal-bundle.json
 output/aprio/combined-signal-bundle.json
 ```
 
-The combined bundle remains the full audit artifact. `aivc report generate`
-turns the exact Citation and Recon sources from one parent run into concise,
-client-facing JSON, Markdown, and HTML. Select `decision` or `detailed` with
-one configuration value or `--profile`; both profiles use the same validated
-evidence. The existing citation and Recon reports remain independently usable.
+The combined bundle remains the producer-level audit artifact. During final
+reporting, the application also executes the packaged, parameterized equivalent
+of `recon_query_for_report.sql` in a PostgreSQL read-only transaction. Its full
+seven-part payload (`client`, `clusters`, `sov`, `signals`, executive summary,
+recommendations, and run history) is preserved under `recon_reporting` in the
+JSON snapshot.
+
+`aivc report generate` turns those exact Citation and Recon sources into
+client-facing JSON, Markdown, and HTML. The `decision` profile shows a compact
+selection of the strongest facts. The `detailed` profile additionally renders
+full SOV company tables and history, query-level visibility, Recon signal and
+recommendation detail, run history, methodology, and evidence appendices. Both
+profiles retain the complete Recon query payload and apply the same quality
+gate; NOISE data remains auditable in JSON but is not presented as a finding.
+The existing citation and Recon reports remain independently usable.
 The legacy Recon LLM citation analyzer is off by default and can be
 enabled only with `AIVC_RECON_LEGACY_AI_ANALYSIS_ENABLED=true`.
 
