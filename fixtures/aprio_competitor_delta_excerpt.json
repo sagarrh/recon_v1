@@ -1,0 +1,51 @@
+[
+  {
+    "company": "Cherry Bekaert",
+    "status": "increased",
+    "previous_mentions": 2,
+    "current_mentions": 14,
+    "visibility_delta": 0.5666666667
+  },
+  {
+    "company": "Aprio",
+    "status": "increased",
+    "previous_mentions": 0,
+    "current_mentions": 10,
+    "upstream_visibility_delta": 0.4761904762
+  },
+  {
+    "company": "BDO",
+    "status": "new",
+    "previous_mentions": 0,
+    "current_mentions": 8,
+    "visibility_delta": 0.380952381
+  },
+  {
+    "company": "Eubanks Accounting & Advisory",
+    "status": "removed",
+    "previous_mentions": 7,
+    "current_mentions": 0,
+    "visibility_delta": -0.35
+  },
+  {
+    "company": "CohnReznick",
+    "status": "increased",
+    "previous_mentions": 8,
+    "current_mentions": 14,
+    "visibility_delta": 0.2666666667
+  },
+  {
+    "company": "Baker Tilly",
+    "status": "increased",
+    "previous_mentions": 7,
+    "current_mentions": 12,
+    "visibility_delta": 0.2214285714
+  },
+  {
+    "company": "HKA",
+    "status": "removed",
+    "previous_mentions": 4,
+    "current_mentions": 0,
+    "visibility_delta": -0.2
+  }
+]

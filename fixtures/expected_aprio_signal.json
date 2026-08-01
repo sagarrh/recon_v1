@@ -1,0 +1,20 @@
+{
+  "signal_type": "company_visibility_increase",
+  "company": "Aprio",
+  "provider": "gemini",
+  "previous_literal_visibility": 0.0,
+  "current_literal_visibility": 0.6666666666666666,
+  "literal_visibility_delta": 0.6666666666666666,
+  "upstream_visibility_delta": 0.47619047619047616,
+  "primary_hypothesis": {
+    "type": "recommendation_pattern_shift",
+    "confidence": "medium"
+  },
+  "single_page_causation_confidence": "low",
+  "new_owned_article_overall_contribution": "low",
+  "data_quality_flags": [
+    "company_metric_mismatch",
+    "citation_positions_unavailable",
+    "execution_configuration_incomplete"
+  ]
+}

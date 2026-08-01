@@ -1,0 +1,29 @@
+{
+  "current_run_id": "1ca57705-51b6-47a6-9725-8d43dbb0a937",
+  "answers_with_aprio": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "repeated_company_bundle": [
+    "Cherry Bekaert",
+    "Aprio",
+    "CohnReznick",
+    "BDO",
+    "Baker Tilly",
+    "Bennett Thrasher"
+  ],
+  "expected_signal": "recommendation_pattern_shift",
+  "expected_confidence": "medium"
+}

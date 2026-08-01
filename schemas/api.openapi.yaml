@@ -1,0 +1,82 @@
+openapi: 3.1.0
+info:
+  title: Company Intelligence Report API
+  version: 0.1.0
+paths:
+  /api/company-intelligence-reports:
+    post:
+      summary: Create or refresh a report from a client company name
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [company_name]
+              properties:
+                company_name:
+                  type: string
+                analysis_start:
+                  type: string
+                  format: date-time
+                analysis_end:
+                  type: string
+                  format: date-time
+                force_refresh:
+                  type: boolean
+      responses:
+        "202":
+          description: Report processing started
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [report_id, status]
+                properties:
+                  report_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                  company_name:
+                    type: string
+  /api/company-intelligence-reports/{report_id}:
+    get:
+      summary: Retrieve one report
+      parameters:
+        - in: path
+          name: report_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Detailed company intelligence report
+        "404":
+          description: Report not found
+  /api/company-intelligence-reports/latest:
+    get:
+      summary: Retrieve the latest report for a client company
+      parameters:
+        - in: query
+          name: company_name
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Latest report
+  /api/company-intelligence-reports/{report_id}/reprocess:
+    post:
+      summary: Reprocess a report
+      parameters:
+        - in: path
+          name: report_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Reprocessing started

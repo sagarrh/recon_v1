@@ -1,0 +1,28 @@
+[
+  {
+    "url": "https://www.aprio.com/insights-events/when-does-cost-or-pricing-data-need-to-be-certified-and-what-does-that-mean/",
+    "status": "persisted",
+    "previous_raw_occurrences": 24,
+    "current_raw_occurrences": 87,
+    "previous_answer_coverage": 17,
+    "current_answer_coverage": 21,
+    "previous_aprio_cooccurrence": 0,
+    "current_aprio_cooccurrence": 14,
+    "previous_cited_without_aprio": 17,
+    "current_cited_without_aprio": 7,
+    "expected_relationship": "supporting_or_topic_context",
+    "expected_single_page_causation_confidence": "low"
+  },
+  {
+    "url": "https://www.aprio.com/insights-events/how-to-account-for-ai-and-token-costs-on-government-contracts-a-far-dfars-and-cas-compliance-guide-ins-article-gc/",
+    "status": "new",
+    "previous_raw_occurrences": 0,
+    "current_raw_occurrences": 1,
+    "previous_answer_coverage": 0,
+    "current_answer_coverage": 1,
+    "previous_aprio_cooccurrence": 0,
+    "current_aprio_cooccurrence": 1,
+    "expected_relationship": "localized_new_owned_source",
+    "expected_overall_contribution_confidence": "low"
+  }
+]

@@ -1,0 +1,46 @@
+{
+  "client_company": "Aprio",
+  "client_id": "b88e87f3-0aa5-4da9-be48-2807b12d5a91",
+  "query": "Who can help me prepare a certificate of cost and pricing data for a federal contract bid?",
+  "service": "gemini",
+  "method": "moe",
+  "previous_run": {
+    "run_id": "fb279a6c-f285-4c8a-afce-78469c9455e1",
+    "created_at": "2026-06-09T20:50:11.141433+00:00",
+    "total_answers": 20,
+    "literal_company_answer_count": 0,
+    "stored_company_count": 0,
+    "stored_visibility": 0.0
+  },
+  "current_run": {
+    "run_id": "1ca57705-51b6-47a6-9725-8d43dbb0a937",
+    "created_at": "2026-07-11T20:54:12.981520+00:00",
+    "total_answers": 21,
+    "literal_company_answer_count": 14,
+    "literal_company_answer_numbers": [
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21
+    ],
+    "literal_visibility": 0.6666666666666666,
+    "stored_company_count": 10,
+    "stored_visibility": 0.47619047619047616,
+    "metric_difference": 4
+  },
+  "expected_flags": [
+    "company_metric_mismatch",
+    "citation_positions_unavailable",
+    "execution_configuration_incomplete"
+  ]
+}
