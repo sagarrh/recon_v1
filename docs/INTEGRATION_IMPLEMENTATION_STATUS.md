@@ -23,6 +23,8 @@ Updated: 2026-08-01
 - Moved integrated Slack delivery after required Recon persistence.
 - Added installed-wheel-safe migrations, report schema, bundle schemas, and
   Recon prompt resources.
+- Moved Recon's historical/manual SQL to `docs/legacy/recon_sql`; it is not
+  packaged and cannot be executed by the root migration runner.
 
 ## Live verification
 
