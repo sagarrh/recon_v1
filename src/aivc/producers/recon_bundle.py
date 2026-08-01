@@ -41,8 +41,11 @@ def build_recon_bundle(
     run_id = str(state["run_id"])
     evidence: list[EvidenceArtifact] = []
     trigger_evidence_ids: dict[tuple[str, str], str] = {}
+    trigger_labels: dict[tuple[str, str], str] = {}
     for trigger_value in state.get("investigation_triggers", []):
         trigger = _dump(trigger_value)
+        if str(trigger.get("triage_severity") or "").upper() == "NOISE":
+            continue
         trigger_hash = stable_id(
             run_id,
             trigger["client_id"],
@@ -52,6 +55,9 @@ def build_recon_bundle(
         evidence_id = f"recon-trigger:{trigger_hash}"
         trigger_evidence_ids[(str(trigger["cluster_id"]), str(trigger["competitor_name"]))] = (
             evidence_id
+        )
+        trigger_labels[(str(trigger["cluster_id"]), str(trigger["competitor_name"]))] = str(
+            trigger.get("cluster_label") or trigger["cluster_id"]
         )
         evidence.append(
             EvidenceArtifact(
@@ -73,30 +79,45 @@ def build_recon_bundle(
         competitor = str(record["competitor_name"])
         cluster_id = str(record["cluster_id"])
         delta = record.get("change_vs_avg")
+        delta_value = None if delta is None else float(delta)
+        current_sov = float(record["sov_score"])
+        trigger_key = (cluster_id, competitor)
+        if trigger_key not in trigger_evidence_ids:
+            continue
+        if delta_value is None and current_sov <= 0:
+            continue
+        first_observation = delta_value is None
         signal_key = stable_id(run_id, client.client_id, cluster_id, competitor, "sov")
         signals.append(
             Signal(
                 signal_id=signal_key,
-                signal_type="recon.sov_change",
+                signal_type=(
+                    "recon.sov_first_observation"
+                    if first_observation
+                    else "recon.sov_change"
+                ),
                 subject_company=competitor,
                 cluster_id=cluster_id,
+                cluster_label=trigger_labels[trigger_key],
                 current_observed_at=f"{record['week_date']}T00:00:00Z",
                 direction=(
                     "increase"
-                    if delta is not None and float(delta) > 0
+                    if delta_value is not None and delta_value > 0
                     else "decrease"
-                    if delta is not None and float(delta) < 0
+                    if delta_value is not None and delta_value < 0
+                    else "new"
+                    if first_observation
                     else "unknown"
                 ),
                 magnitude=MeasuredMetric(
-                    name="sov_change_vs_baseline",
-                    value=float(delta) if delta is not None else None,
+                    name=("current_sov" if first_observation else "sov_change_vs_baseline"),
+                    value=current_sov if first_observation else delta_value,
                     unit="percentage_points",
                 ),
                 metrics=[
                     MeasuredMetric(
                         name="current_sov",
-                        value=float(record["sov_score"]),
+                        value=current_sov,
                         unit="percentage_points",
                     ),
                     MeasuredMetric(
@@ -110,12 +131,8 @@ def build_recon_bundle(
                     ),
                 ],
                 confidence="medium" if record.get("z_score") is None else "high",
-                evidence_refs=[
-                    trigger_evidence_ids[(cluster_id, competitor)]
-                ]
-                if (cluster_id, competitor) in trigger_evidence_ids
-                else [],
-                warnings=([] if delta is not None else ["sov_baseline_unavailable"]),
+                evidence_refs=[trigger_evidence_ids[trigger_key]],
+                warnings=([] if delta_value is not None else ["sov_first_observation"]),
                 source_payload={
                     "alert_type": record.get("alert_type"),
                     "alert_reason": record.get("alert_reason"),

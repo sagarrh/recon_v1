@@ -209,10 +209,63 @@ output/aprio/recon-signal-bundle.json
 output/aprio/combined-signal-bundle.json
 ```
 
-The combined bundle is structured source material for the future unified final
-narrative report; it is not itself that final narrative report.
+The combined bundle is the full structured audit source. For the unified,
+client-facing report, use the next section.
 
-## 9. Database safety
+## 9. Generate the unified final report
+
+The normal operator command runs Citation and Recon once under a single parent
+run and then creates the final JSON, Markdown, and HTML report:
+
+```powershell
+uv run aivc report generate --company "Aprio" --profile decision
+```
+
+For production, prefer the exact authoritative UUID. This avoids any ambiguity
+when two database clients share the same display name:
+
+```powershell
+uv run aivc report generate --client-id "CLIENT-UUID" --profile decision
+```
+
+Use `--profile detailed` for expanded provider, finding, action, and evidence
+limits. The underlying measurements and publication filters are identical in
+both profiles. The default is controlled by `config/reporting.toml`, or by:
+
+```dotenv
+AIVC_REPORT_PROFILE=decision
+AIVC_REPORT_CONFIG_PATH=
+```
+
+Partial reports are truthful but have disclosed evidence limitations. They are
+kept run-scoped and persisted; latest convenience copies are refreshed only
+when the report is complete, or when `--allow-partial` is explicitly supplied.
+
+Expected additional files:
+
+```text
+output/aprio/final-report.json
+output/aprio/final-report.md
+output/aprio/final-report.html
+output/aprio/runs/<parent-run-id>/<profile>/artifact-manifest.json
+output/aprio/runs/<parent-run-id>/<profile>/final-report.json
+output/aprio/runs/<parent-run-id>/<profile>/final-report.md
+output/aprio/runs/<parent-run-id>/<profile>/final-report.html
+```
+
+Inspect, validate, or rerender an exact historical parent without rerunning
+either producer:
+
+```powershell
+uv run aivc report show --parent-run-id "PARENT-UUID"
+uv run aivc report validate --path "output/aprio/final-report.json"
+uv run aivc report render --parent-run-id "PARENT-UUID" --profile detailed --allow-partial
+```
+
+Historical rendering reads only the source bundles attached to that parent run;
+it never substitutes newer Citation or Recon data.
+
+## 10. Database safety
 
 `public.ai_monitoring` is immutable source evidence. Application code reads it
 inside read-only operations and never inserts, updates, deletes, truncates,

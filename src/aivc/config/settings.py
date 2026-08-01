@@ -32,6 +32,10 @@ class AivcSettings(BaseSettings):
     aivc_delivery_mode: str = Field(default="configured", pattern="^(configured|disabled)$")
     aivc_stage_lease_seconds: int = Field(default=900, ge=30, le=86_400)
     aivc_bundle_output_dir: Path = Path("./output")
+    aivc_report_profile: str | None = Field(
+        default=None, pattern="^(decision|detailed)$"
+    )
+    aivc_report_config_path: Path | None = None
 
     def require_database_url(self) -> str:
         if self.database_url is None or not self.database_url.get_secret_value().strip():

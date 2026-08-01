@@ -48,6 +48,28 @@ TABLE_REQUIREMENTS: dict[str, frozenset[str]] = {
         }
     ),
     "sov_weekly": frozenset({"client_id", "cluster_id", "week_date", "top_companies", "synced_at"}),
+    "cycle_runs": frozenset({"run_id", "sync_date", "mode", "status", "started_at"}),
+    "sov_tracking": frozenset(
+        {"run_id", "client_id", "cluster_id", "competitor_name", "current_sov"}
+    ),
+    "investigation_triggers": frozenset(
+        {"run_id", "client_id", "trigger_key", "cluster_id", "competitor_name"}
+    ),
+    "investigations": frozenset(
+        {"run_id", "trigger_key", "client_id", "cluster_id", "ai_citation_changes"}
+    ),
+    "recommendations": frozenset(
+        {"run_id", "client_id", "cluster_id", "validation_status"}
+    ),
+    "reports": frozenset(
+        {"run_id", "recommendation_id", "client_id", "validation_status"}
+    ),
+    "blog_detections": frozenset({"run_id", "client_id", "url"}),
+    "scout_decision_log": frozenset(
+        {"run_id", "client_id", "cluster_id", "noise", "field"}
+    ),
+    "scout_outcomes": frozenset({"recommendation_id", "run_id", "client_id"}),
+    "prompt_log": frozenset({"run_id", "node", "model", "total_tokens"}),
 }
 
 RECON_WRITE_TABLES = frozenset(
@@ -61,8 +83,21 @@ RECON_WRITE_TABLES = frozenset(
         "blog_detections",
         "scout_decision_log",
         "scout_outcomes",
+        "prompt_log",
     }
 )
+
+RECON_UPSERT_TARGETS: dict[str, frozenset[str]] = {
+    "cycle_runs": frozenset({"run_id"}),
+    "sov_tracking": frozenset({"run_id", "client_id", "cluster_id", "competitor_name"}),
+    "investigation_triggers": frozenset({"run_id", "trigger_key"}),
+    "investigations": frozenset({"run_id", "trigger_key"}),
+    "recommendations": frozenset({"run_id", "client_id", "cluster_id"}),
+    "reports": frozenset({"run_id", "recommendation_id"}),
+    "blog_detections": frozenset({"run_id", "url"}),
+    "scout_decision_log": frozenset({"run_id", "client_id", "cluster_id"}),
+    "scout_outcomes": frozenset({"recommendation_id"}),
+}
 
 
 def assess_columns(
@@ -80,6 +115,19 @@ def assess_columns(
             "column_count": len(actual),
         }
     return assessment
+
+
+def assess_unique_targets(
+    discovered: Mapping[str, set[frozenset[str]]],
+) -> dict[str, dict[str, Any]]:
+    """Verify every PostgREST upsert target has a matching unique index."""
+    return {
+        table: {
+            "required_columns": sorted(columns),
+            "present": columns in discovered.get(table, set()),
+        }
+        for table, columns in RECON_UPSERT_TARGETS.items()
+    }
 
 
 def audit_shared_schema(settings: Settings) -> dict[str, Any]:
@@ -102,6 +150,49 @@ def audit_shared_schema(settings: Settings) -> dict[str, Any]:
             table = row["table_name"]
             discovered.setdefault(table, set()).add(row["column_name"])
             column_types.setdefault(table, {})[row["column_name"]] = row["udt_name"]
+
+        unique_rows = connection.execute(
+            """
+            SELECT table_name, index_name, array_agg(column_name ORDER BY position) AS columns
+            FROM (
+              SELECT table_rel.relname AS table_name,
+                     index_rel.relname AS index_name,
+                     attribute.attname AS column_name,
+                     key.position
+              FROM pg_index index_meta
+              JOIN pg_class table_rel ON table_rel.oid = index_meta.indrelid
+              JOIN pg_class index_rel ON index_rel.oid = index_meta.indexrelid
+              JOIN pg_namespace namespace ON namespace.oid = table_rel.relnamespace
+              CROSS JOIN LATERAL unnest(index_meta.indkey)
+                WITH ORDINALITY AS key(attribute_number, position)
+              JOIN pg_attribute attribute
+                ON attribute.attrelid = table_rel.oid
+               AND attribute.attnum = key.attribute_number
+              WHERE namespace.nspname = 'public'
+                AND index_meta.indisunique
+                AND table_rel.relname = ANY(%s)
+            ) indexed
+            GROUP BY table_name, index_name
+            """,
+            (sorted(RECON_UPSERT_TARGETS),),
+        ).fetchall()
+        unique_targets: dict[str, set[frozenset[str]]] = {}
+        for row in unique_rows:
+            unique_targets.setdefault(row["table_name"], set()).add(
+                frozenset(str(column) for column in row["columns"])
+            )
+
+        mode_rows = connection.execute(
+            """
+            SELECT pg_get_constraintdef(constraint_meta.oid) AS definition
+            FROM pg_constraint constraint_meta
+            JOIN pg_class table_rel ON table_rel.oid = constraint_meta.conrelid
+            JOIN pg_namespace namespace ON namespace.oid = table_rel.relnamespace
+            WHERE namespace.nspname = 'public'
+              AND table_rel.relname = 'cycle_runs'
+              AND constraint_meta.contype = 'c'
+            """
+        ).fetchall()
 
         stats = connection.execute(
             """
@@ -130,7 +221,13 @@ def audit_shared_schema(settings: Settings) -> dict[str, Any]:
             raise RuntimeError("Database schema audit returned no aggregate row.")
 
     table_assessment = assess_columns(discovered)
+    unique_assessment = assess_unique_targets(unique_targets)
     missing_recon_tables = sorted(RECON_WRITE_TABLES - discovered.keys())
+    missing_unique_targets = sorted(
+        table for table, result in unique_assessment.items() if not result["present"]
+    )
+    cycle_mode_definitions = [str(row["definition"]) for row in mode_rows]
+    cycle_live_mode_allowed = any("'live'" in definition for definition in cycle_mode_definitions)
     source_latest = stats["source_latest_at"]
     mirror_latest = stats["mirror_latest_at"]
     mirror_lag_seconds = None
@@ -142,13 +239,22 @@ def audit_shared_schema(settings: Settings) -> dict[str, Any]:
     )
     return {
         "mode": "read_only",
-        "ready": required_sources_ready and not missing_recon_tables,
+        "ready": (
+            required_sources_ready
+            and not missing_recon_tables
+            and not missing_unique_targets
+            and cycle_live_mode_allowed
+        ),
         "source_of_truth": "public.ai_monitoring",
         "tables": table_assessment,
         "column_types": column_types,
         "recon_write_tables": {
             "required": sorted(RECON_WRITE_TABLES),
             "missing": missing_recon_tables,
+            "unique_targets": unique_assessment,
+            "missing_unique_targets": missing_unique_targets,
+            "cycle_run_mode_constraints": cycle_mode_definitions,
+            "cycle_live_mode_allowed": cycle_live_mode_allowed,
         },
         "identity": {
             "client_count": stats["client_count"],

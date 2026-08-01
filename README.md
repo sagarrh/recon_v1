@@ -101,6 +101,7 @@ uv run aivc db check
 uv run aivc db audit
 uv run aivc citations generate --company "Aprio"
 uv run aivc run --company "Aprio"
+uv run aivc report generate --company "Aprio" --profile decision
 ```
 
 `aivc citations generate` runs independently and writes the established
@@ -115,9 +116,12 @@ output/aprio/recon-signal-bundle.json
 output/aprio/combined-signal-bundle.json
 ```
 
-The combined bundle is an integration artifact for later final-report
-composition; the existing citation and Recon reports remain independently
-usable. The legacy Recon LLM citation analyzer is off by default and can be
+The combined bundle remains the full audit artifact. `aivc report generate`
+turns the exact Citation and Recon sources from one parent run into concise,
+client-facing JSON, Markdown, and HTML. Select `decision` or `detailed` with
+one configuration value or `--profile`; both profiles use the same validated
+evidence. The existing citation and Recon reports remain independently usable.
+The legacy Recon LLM citation analyzer is off by default and can be
 enabled only with `AIVC_RECON_LEGACY_AI_ANALYSIS_ENABLED=true`.
 
 Unscoped backfill deliberately does not guess which tracked company is the

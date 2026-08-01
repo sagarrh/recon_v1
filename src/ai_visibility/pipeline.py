@@ -7,7 +7,7 @@ from uuid import UUID
 
 import structlog
 
-from ai_visibility.companies.resolver import resolve_client
+from ai_visibility.companies.resolver import ResolvedClient, resolve_client, resolve_client_by_id
 from ai_visibility.config.settings import Settings
 from ai_visibility.database.migrations import apply_migrations
 from ai_visibility.database.repository import (
@@ -39,12 +39,25 @@ class GenerationResult:
     normalized_runs: tuple[NormalizedRun, ...]
 
 
-def generate_company_report(settings: Settings, company_name: str) -> GenerationResult:
-    logger.info("report_generation_started", company=company_name)
+def generate_company_report(
+    settings: Settings,
+    company_name: str | None = None,
+    *,
+    client_id: UUID | None = None,
+) -> GenerationResult:
+    if (company_name is None) == (client_id is None):
+        raise ValueError("Provide exactly one of company_name or client_id.")
+    logger.info(
+        "report_generation_started", company=company_name, client_id=str(client_id or "")
+    )
     # Fail before any writes if the source is missing or incompatible.
     check_database(settings)
     apply_migrations(settings)
-    client = resolve_client(settings, company_name)
+    client: ResolvedClient = (
+        resolve_client_by_id(settings, client_id)
+        if client_id is not None
+        else resolve_client(settings, str(company_name))
+    )
     raw_runs = load_raw_runs(settings, client.client_id)
     company_names = {client.canonical_name}
     for raw in raw_runs:

@@ -1,0 +1,95 @@
+# {{ report.client.canonical_name }} — AI Visibility & Competitive Intelligence
+
+**Status:** {{ report.status.value }}<br>
+**Profile:** {{ report.config.report_profile.value }}<br>
+**Reporting period:** {{ report.analysis_period.start or "Unavailable" }} to {{ report.analysis_period.end or "Unavailable" }}
+
+## Executive overview
+
+{{ report.executive_summary }}
+
+{% for metric in report.executive_metrics %}
+- **Literal answer visibility:** {{ metric.value | percent }}{% if metric.numerator is not none and metric.denominator is not none %} ({{ metric.numerator }}/{{ metric.denominator }} answers){% endif %}
+{% endfor %}
+
+## Provider performance
+
+| Provider | Current literal visibility | Trend | Queries |
+|---|---:|---|---:|
+{% for provider in report.provider_summary %}
+| {{ provider.provider }} | {{ provider.current_visibility | percent }} | {{ provider.trend }} | {{ provider.query_count }} |
+{% endfor %}
+
+## Priority findings
+
+{% if report.decision_cards %}
+{% for card in report.decision_cards %}
+### {{ loop.index }}. {{ card.title }}
+
+**Priority:** {{ card.priority }} · **Confidence:** {{ card.confidence }}<br>
+**Topic:** {{ card.cluster_label }}{% if card.provider %} · **Provider:** {{ card.provider }}{% endif %}
+
+{{ card.summary }}
+
+{% if card.recon_evidence_summary %}
+**Recon context:** {{ card.recon_evidence_summary }}
+{% endif %}
+
+{% if card.citation_sources %}
+**Citation sources:**
+
+{% for source in card.citation_sources %}
+- {{ source.domain }} — {{ source.status }}{% if source.coverage_delta is not none %}, coverage change {{ source.coverage_delta }}{% endif %}
+{% endfor %}
+{% endif %}
+
+{% if card.recommended_actions %}
+**Actions:**
+
+{% for action in card.recommended_actions %}
+- {{ action.action }} _Measurement: {{ action.measurement_signal }}_
+{% endfor %}
+{% endif %}
+
+{% endfor %}
+{% else %}
+No material publishable movement was detected for this reporting period.
+{% endif %}
+
+## Consolidated action plan
+
+{% for action in report.consolidated_actions %}
+{{ loop.index }}. **{{ action.action }}**<br>
+   Category: {{ action.category }}{% if action.time_horizon %} · Timing: {{ action.time_horizon }}{% endif %}<br>
+   Measurement: {{ action.measurement_signal }}
+{% else %}
+Continue the existing monitoring cadence and reassess when material movement appears.
+{% endfor %}
+
+## Limitations
+
+{% for limitation in report.limitations %}
+- {{ limitation }}
+{% else %}
+- No material limitations were detected.
+{% endfor %}
+
+## Methodology
+
+{% for metric in report.methodology %}
+- **{{ metric.display_name }}:** {{ metric.definition }} Scope: {{ metric.aggregation_scope }}.
+{% endfor %}
+
+{% if report.config.effective_profile.include_evidence_appendix %}
+## Evidence appendix
+
+{% for evidence in report.evidence_index %}
+- `{{ evidence.evidence_id }}` — {{ evidence.kind }}{% if evidence.summary %}: {{ evidence.summary }}{% endif %}
+{% endfor %}
+{% endif %}
+
+---
+
+Report ID: `{{ report.report_id }}`<br>
+Parent run: `{{ report.parent_run_id }}`<br>
+Snapshot checksum: `{{ report.checksum }}`

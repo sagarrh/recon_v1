@@ -71,8 +71,8 @@ def start_run(sb, run_id: str, sync_date: str, mode: str, client_filter: str | N
     }
     try:
         sb.table(m.SCOUT_CYCLE_RUNS_TABLE).upsert(row, on_conflict="run_id").execute()
-    except Exception as e:
-        log.warning("[sed_writer] start_run failed for %s: %s", run_id, e)
+    except Exception as exc:
+        raise RuntimeError(f"failed to create Recon cycle run {run_id}: {exc}") from exc
 
 
 _FINISH_RUN_OPTIONAL_FIELDS = (
@@ -119,8 +119,8 @@ def finish_run(sb, run_id: str, status: str, totals: dict | None = None, error_m
         patch["error_message"] = error_message[:2000]
     try:
         sb.table(m.SCOUT_CYCLE_RUNS_TABLE).update(patch).eq("run_id", run_id).execute()
-    except Exception as e:
-        log.warning("[sed_writer] finish_run failed for %s: %s", run_id, e)
+    except Exception as exc:
+        raise RuntimeError(f"failed to finish Recon cycle run {run_id}: {exc}") from exc
     if status == "completed":
         try:
             _token_spike_alert(sb, run_id, int(patch.get("total_tokens", 0) or 0))

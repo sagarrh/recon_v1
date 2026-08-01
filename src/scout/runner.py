@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -65,7 +66,7 @@ def run_recon(
         "numeric_provenance_metric": {},
     }
     sb = get_sed_client()
-    start_run(sb, run_id, prepared["sync_date"], "aivc", client.get("client_name"))
+    start_run(sb, run_id, prepared["sync_date"], "live", client.get("client_name"))
     try:
         final_state = dict(build_graph(include_delivery=False).invoke(state))
         prompt_tokens, completion_tokens = get_token_total()
@@ -88,22 +89,26 @@ def run_recon(
         if deliver:
             slack_delivery(final_state)
         flush_prompt_log()
-        finish_run(
-            sb,
-            run_id,
-            "completed",
-            {
-                "total_tokens": prompt_tokens + completion_tokens,
-                "total_prompt_tokens": prompt_tokens,
-                "total_completion_tokens": completion_tokens,
-                "clients_processed": 1,
-                "triggers_fired": len(final_state.get("investigation_triggers", [])),
-            },
-        )
-        return final_state, persistence
     except Exception as exc:
         try:
             flush_prompt_log()
-        finally:
             finish_run(sb, run_id, "failed", error_message=str(exc))
+        except Exception:
+            logging.getLogger(__name__).exception(
+                "failed to mark Recon cycle run %s as failed", run_id
+            )
         raise
+
+    finish_run(
+        sb,
+        run_id,
+        "completed",
+        {
+            "total_tokens": prompt_tokens + completion_tokens,
+            "total_prompt_tokens": prompt_tokens,
+            "total_completion_tokens": completion_tokens,
+            "clients_processed": 1,
+            "triggers_fired": len(final_state.get("investigation_triggers", [])),
+        },
+    )
+    return final_state, persistence

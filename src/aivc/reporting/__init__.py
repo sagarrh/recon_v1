@@ -1,0 +1,12 @@
+"""Client-facing final report composition and rendering."""
+
+from aivc.reporting.config import ReportProfile, ResolvedReportConfig, load_report_config
+from aivc.reporting.models import DecisionCard, FinalReportSnapshot
+
+__all__ = [
+    "DecisionCard",
+    "FinalReportSnapshot",
+    "ReportProfile",
+    "ResolvedReportConfig",
+    "load_report_config",
+]
