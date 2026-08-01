@@ -93,6 +93,9 @@ normalization, report generation, and page queueing is idempotent.
 
 ### Integrated citation + Recon pipeline
 
+For the complete operator walkthrough, see
+[`docs/OPERATIONS_GUIDE.md`](docs/OPERATIONS_GUIDE.md).
+
 ```powershell
 uv run aivc db check
 uv run aivc db audit
