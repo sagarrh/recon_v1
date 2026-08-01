@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 
 from ai_visibility.config.settings import Settings
 from ai_visibility.database.connection import connect
@@ -16,15 +17,19 @@ _FORBIDDEN_SOURCE_MUTATIONS = (
 )
 
 
-def migration_directory() -> Path:
-    return Path(__file__).resolve().parents[3] / "migrations"
+def migration_directory() -> Traversable:
+    """Return migrations from package data, including installed wheels."""
+    return files("ai_visibility.resources.migrations")
 
 
 def apply_migrations(settings: Settings) -> list[str]:
     applied: list[str] = []
-    files = sorted(migration_directory().glob("*.sql"))
+    migration_files = sorted(
+        (path for path in migration_directory().iterdir() if path.name.endswith(".sql")),
+        key=lambda path: path.name,
+    )
     with connect(settings) as connection:
-        for path in files:
+        for path in migration_files:
             sql = path.read_text(encoding="utf-8")
             lowered = " ".join(sql.casefold().split())
             forbidden = [token for token in _FORBIDDEN_SOURCE_MUTATIONS if token in lowered]

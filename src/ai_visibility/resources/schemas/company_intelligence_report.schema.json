@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/company_intelligence_report.schema.json",
+  "title": "Company Intelligence Report",
+  "type": "object",
+  "required": [
+    "report_type",
+    "company",
+    "analysis_period",
+    "executive_summary",
+    "provider_intelligence",
+    "query_intelligence",
+    "competitor_intelligence",
+    "signals",
+    "recommended_actions",
+    "data_quality_flags",
+    "methodology"
+  ],
+  "properties": {
+    "report_type": {
+      "const": "company_intelligence_report"
+    },
+    "company": {
+      "type": "object",
+      "required": [
+        "canonical_name",
+        "client_id"
+      ],
+      "properties": {
+        "canonical_name": {
+          "type": "string"
+        },
+        "client_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "official_domains": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "analysis_period": {
+      "type": "object",
+      "required": [
+        "valid_run_count"
+      ],
+      "properties": {
+        "start": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "end": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "valid_run_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "invalid_run_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "executive_summary": {
+      "type": "object"
+    },
+    "overall_visibility": {
+      "type": "object"
+    },
+    "provider_intelligence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "provider",
+          "run_count",
+          "query_count",
+          "latest_visibility",
+          "trend"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "run_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "query_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "latest_visibility": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "trend": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "query_intelligence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "monitor_query_key",
+          "query",
+          "provider",
+          "run_count",
+          "current_visibility",
+          "history"
+        ],
+        "properties": {
+          "monitor_query_key": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "run_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "current_visibility": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "history": {
+            "type": "array"
+          }
+        }
+      }
+    },
+    "cluster_intelligence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "mention_quality": {
+      "type": "object"
+    },
+    "citation_intelligence": {
+      "type": "object"
+    },
+    "page_intelligence": {
+      "type": "object"
+    },
+    "competitor_intelligence": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "change_timeline": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "signals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "signal_type",
+          "observed",
+          "primary_hypothesis",
+          "confidence",
+          "evidence",
+          "alternative_explanations",
+          "recommended_actions",
+          "warnings"
+        ],
+        "properties": {
+          "signal_type": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "object",
+            "required": [
+              "company",
+              "provider",
+              "previous_run_id",
+              "current_run_id",
+              "literal_visibility_delta"
+            ]
+          },
+          "primary_hypothesis": {
+            "type": "object",
+            "required": [
+              "type",
+              "confidence",
+              "inference"
+            ]
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "evidence": {
+            "type": "object"
+          },
+          "alternative_explanations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recommended_actions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "recommended_actions": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "object"
+        ]
+      }
+    },
+    "data_quality_flags": {
+      "type": "array",
+      "items": {
+        "type": [
+          "string",
+          "object"
+        ]
+      }
+    },
+    "methodology": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true
+}

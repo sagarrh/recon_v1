@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from importlib.resources import files
+from importlib.resources.abc import Traversable
 from typing import Any
 
 from jsonschema import Draft202012Validator, FormatChecker
 
 
-def schema_path() -> Path:
-    return (
-        Path(__file__).resolve().parents[3] / "schemas" / "company_intelligence_report.schema.json"
+def schema_path() -> Traversable:
+    """Return the packaged report schema for editable and wheel installs."""
+    return files("ai_visibility.resources.schemas").joinpath(
+        "company_intelligence_report.schema.json"
     )
 
 

@@ -1,0 +1,1 @@
+"""AIVC command-line interface."""

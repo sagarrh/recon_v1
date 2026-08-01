@@ -57,6 +57,34 @@ def resolve_client(settings: Settings, company_name: str) -> ResolvedClient:
         cursor.execute("set transaction read only")
         cursor.execute(
             """
+            select client_id, client_name, company_domain, company_website
+            from public.clients
+            where lower(btrim(client_name)) = %s
+            order by client_id
+            """,
+            (normalized,),
+        )
+        authoritative_rows = cursor.fetchall()
+        if len(authoritative_rows) == 1:
+            row = authoritative_rows[0]
+            domains = {
+                str(value).strip().casefold().removeprefix("https://").removeprefix("http://")
+                for value in (row.get("company_domain"), row.get("company_website"))
+                if value and str(value).strip()
+            }
+            return ResolvedClient(
+                canonical_name=str(row.get("client_name") or canonical),
+                client_id=UUID(str(row["client_id"])),
+                aliases=tuple(aliases_for(str(row.get("client_name") or canonical))),
+                official_domains=tuple(sorted(domain.split("/", 1)[0] for domain in domains)),
+            )
+        if len(authoritative_rows) > 1:
+            candidates = ", ".join(str(row["client_id"]) for row in authoritative_rows)
+            raise LookupError(
+                f"Company {company_name!r} matches multiple authoritative clients: {candidates}."
+            )
+        cursor.execute(
+            """
             select to_regclass('public.ai_visibility_client_companies') as relation
             """
         )

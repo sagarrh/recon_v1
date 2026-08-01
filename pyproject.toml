@@ -9,16 +9,23 @@ dependencies = [
   "httpx>=0.28,<0.29",
   "jinja2>=3.1.4",
   "jsonschema>=4.23.0",
+  "feedparser>=6.0.0",
+  "langgraph>=0.2.0",
+  "langsmith>=0.1.0",
+  "lxml>=5.0.0",
   "numpy>=2.1.0",
+  "openai>=1.0.0",
   "psycopg[binary,pool]>=3.2.1",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.5.2",
   "pypdf>=5.0.0,<7",
   "rapidfuzz>=3.10.0",
+  "requests>=2.31.0",
   "ruptures>=1.1.9",
   "scipy>=1.14.1",
   "sqlalchemy>=2.0.35",
   "structlog>=24.4.0",
+  "supabase>=2.0.0",
   "tenacity>=9.0.0",
   "trafilatura>=1.12.2",
   "typer>=0.12.5",
@@ -40,13 +47,14 @@ dev = [
 
 [project.scripts]
 ai-visibility = "ai_visibility.cli.app:main"
+aivc = "aivc.cli.app:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ai_visibility"]
+packages = ["src/ai_visibility", "src/scout", "src/aivc"]
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --cov=ai_visibility --cov-report=term-missing --cov-fail-under=70"
@@ -59,10 +67,14 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/scout/**/*.py" = ["E501", "RUF001", "RUF002"]
+"tests/recon/**/*.py" = ["E501"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["ai_visibility"]
+packages = ["ai_visibility", "aivc"]
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
 

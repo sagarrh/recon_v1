@@ -5,7 +5,7 @@ from conftest import MAIN_URL, NEW_URL
 from ai_visibility.analysis.citations import citation_deltas
 from ai_visibility.normalization.models import RawMonitoringRun
 from ai_visibility.normalization.runs import normalize_run
-from ai_visibility.utils.text import literal_mentions
+from ai_visibility.utils.text import literal_company_mentions, literal_mentions
 from ai_visibility.utils.urls import normalize_url
 
 
@@ -71,3 +71,11 @@ def test_literal_matching_protects_substrings() -> None:
 
 def test_overlapping_aliases_are_counted_once() -> None:
     assert literal_mentions("BDO USA is listed.", ["BDO USA", "BDO"]) == (1, 0)
+
+
+def test_company_mentions_assign_overlaps_to_longest_company() -> None:
+    counts = literal_company_mentions(
+        "BDO USA advises Aprio, not an apriori assumption.",
+        {"BDO": ["BDO"], "BDO USA": ["BDO USA"], "Aprio": ["Aprio"]},
+    )
+    assert counts == {"BDO USA": 1, "Aprio": 1}

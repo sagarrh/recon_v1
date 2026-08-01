@@ -17,6 +17,7 @@ from ai_visibility.database.repository import (
 )
 from ai_visibility.database.validation import check_database
 from ai_visibility.jobs.queue import enqueue_report_pages
+from ai_visibility.normalization.models import NormalizedRun
 from ai_visibility.normalization.parsing import as_dict
 from ai_visibility.normalization.runs import normalize_run
 from ai_visibility.reports.builder import build_report
@@ -34,6 +35,8 @@ class GenerationResult:
     valid_run_count: int
     invalid_run_count: int
     queued_page_count: int
+    report: dict[str, object]
+    normalized_runs: tuple[NormalizedRun, ...]
 
 
 def generate_company_report(settings: Settings, company_name: str) -> GenerationResult:
@@ -109,4 +112,6 @@ def generate_company_report(settings: Settings, company_name: str) -> Generation
         valid_run_count=sum(run.is_valid for run in normalized),
         invalid_run_count=sum(not run.is_valid for run in normalized),
         queued_page_count=queued,
+        report=report,
+        normalized_runs=tuple(normalized),
     )

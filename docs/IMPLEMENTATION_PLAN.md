@@ -1,5 +1,10 @@
 # Implementation Plan
 
+> The original citation implementation described below is complete. Recon V1
+> monorepo integration is tracked in
+> `docs/MONOREPO_RECON_INTEGRATION_IMPLEMENTATION_PLAN.md`; current verified
+> status is in `docs/INTEGRATION_IMPLEMENTATION_STATUS.md`.
+
 ## 1. Proposed final project structure
 
 The repository will remain a single Python 3.12+ backend-only package:

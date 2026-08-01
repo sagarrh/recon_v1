@@ -1,6 +1,6 @@
 # IMPORTANT: Final Python Backend-Only Scope
 
-This repository initially contains specifications only. Codex must create a Python 3.12+ CLI application in this root. There is no frontend. Read `docs/00_GREENFIELD_PYTHON_BACKEND_ONLY.md` and `CODEX_FINAL_PROMPT.md` first.
+This repository contains a Python 3.12+ backend-only CLI application. There is no frontend.
 
 ---
 
@@ -67,6 +67,11 @@ Set `DATABASE_URL` in `.env` to the direct Supabase PostgreSQL connection
 string. `OPENAI_API_KEY` is optional and is not used by deterministic
 calculation or report generation.
 
+The integrated Recon producer additionally needs `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `OPENROUTER_API_KEY`, and (for its web evidence
+branches) `BRIGHT_DATA_API_KEY`. LangSmith and Slack credentials are optional.
+The direct PostgreSQL URL and Supabase URL must identify the same project.
+
 ### Database and processing
 
 ```bash
@@ -82,8 +87,35 @@ uv run ai-visibility jobs retry
 ```
 
 Migrations are append-only SQL files in `migrations/`. They create only
-`ai_visibility_*` structures and record checksums. Re-running migrations,
+`ai_visibility_*` and `aivc_*` structures and record checksums. They never
+mutate `public.ai_monitoring`. Re-running migrations,
 normalization, report generation, and page queueing is idempotent.
+
+### Integrated citation + Recon pipeline
+
+```powershell
+uv run aivc db check
+uv run aivc db audit
+uv run aivc citations generate --company "Aprio"
+uv run aivc run --company "Aprio"
+```
+
+`aivc citations generate` runs independently and writes the established
+Company Intelligence Report plus `citation-signal-bundle.json`. `aivc run`
+resolves the client once, overlaps citation processing with Recon preparation,
+feeds the deterministic citation bundle into Recon, persists required Recon
+artifacts before optional Slack delivery, and writes:
+
+```text
+output/aprio/citation-signal-bundle.json
+output/aprio/recon-signal-bundle.json
+output/aprio/combined-signal-bundle.json
+```
+
+The combined bundle is an integration artifact for later final-report
+composition; the existing citation and Recon reports remain independently
+usable. The legacy Recon LLM citation analyzer is off by default and can be
+enabled only with `AIVC_RECON_LEGACY_AI_ANALYSIS_ENABLED=true`.
 
 Unscoped backfill deliberately does not guess which tracked company is the
 client. Use `runs backfill --company "Aprio"` when client/competitor
@@ -143,7 +175,7 @@ PAGE_FETCH_MAX_WORKERS=4
 ```bash
 uv run pytest
 uv run ruff check .
-uv run mypy src
+uv run mypy
 uv run ruff format --check .
 ```
 

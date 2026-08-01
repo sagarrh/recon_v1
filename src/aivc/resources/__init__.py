@@ -1,0 +1,1 @@
+"""Packaged AIVC resource files."""
