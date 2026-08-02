@@ -10,7 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aivc.contracts.models import AnalysisPeriod, ClientIdentity
-from aivc.reporting.config import ProfileSettings, ReportProfile
+from aivc.reporting.config import ProfileSettings, ReportAudience, ReportProfile
 
 
 class StrictReportModel(BaseModel):
@@ -223,6 +223,61 @@ class ReconReportingPayload(StrictReportModel):
     run_history: list[dict[str, Any]]
 
 
+class ClientHeadlineMetric(StrictReportModel):
+    label: str
+    value: str
+    context: str
+
+
+class ClientTopicBrief(StrictReportModel):
+    priority_rank: int = Field(ge=1)
+    cluster_id: str
+    cluster_label: str
+    status: str
+    client_sov: float | None = None
+    client_rank: int | None = None
+    market_size: int = Field(default=0, ge=0)
+    leader_name: str | None = None
+    leader_sov: float | None = None
+    gap_to_leader: float | None = None
+    interpretation: str
+    tracked_positions: list[SovCompanyPosition] = Field(default_factory=list)
+    competitive_takeaway: str
+    recommended_focus: list[str] = Field(default_factory=list)
+
+
+class ClientPriority(StrictReportModel):
+    priority_rank: int = Field(ge=1)
+    source: Literal["citation", "recon"]
+    title: str
+    topic: str | None = None
+    competitor: str | None = None
+    priority: str
+    confidence: str
+    what_is_happening: str
+    why_it_matters: str
+    working_hypothesis: str | None = None
+    actions: list[str] = Field(default_factory=list)
+    timeline: str | None = None
+
+
+class ClientActionGroup(StrictReportModel):
+    horizon: Literal["Immediate", "Near term", "Monitor"]
+    actions: list[str] = Field(default_factory=list)
+
+
+class ClientPresentation(StrictReportModel):
+    executive_narrative: str
+    main_implication_title: str
+    main_implication: str
+    headline_metrics: list[ClientHeadlineMetric] = Field(default_factory=list)
+    topics: list[ClientTopicBrief] = Field(default_factory=list)
+    priorities: list[ClientPriority] = Field(default_factory=list)
+    action_plan: list[ClientActionGroup] = Field(default_factory=list)
+    leadership_decisions: list[str] = Field(default_factory=list)
+    strategic_conclusion: str
+
+
 class EvidenceIndexItem(StrictReportModel):
     evidence_id: str
     kind: str
@@ -242,6 +297,7 @@ class ArtifactRecord(StrictReportModel):
 class ReportConfigMetadata(StrictReportModel):
     config_version: str
     report_profile: ReportProfile
+    report_audience: ReportAudience = ReportAudience.internal
     report_config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source: str
     effective_profile: ProfileSettings
@@ -249,8 +305,8 @@ class ReportConfigMetadata(StrictReportModel):
 
 class FinalReportSnapshot(StrictReportModel):
     # 1.0 remains readable so historical reports can be upgraded in place.
-    # New snapshots always use 1.1 and the current JSON Schema only accepts 1.1.
-    schema_version: Literal["1.0", "1.1"] = "1.1"
+    # New snapshots always use 1.2 and the current JSON Schema only accepts 1.2.
+    schema_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     report_id: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
     parent_run_id: UUID
@@ -271,6 +327,7 @@ class FinalReportSnapshot(StrictReportModel):
     recon_run_history: list[ReconRunHistory] = Field(default_factory=list)
     excluded_topics: list[ExcludedTopic] = Field(default_factory=list)
     recon_reporting: ReconReportingPayload | None = None
+    client_presentation: ClientPresentation | None = None
     decision_cards: list[DecisionCard] = Field(default_factory=list)
     consolidated_actions: list[RecommendedAction] = Field(default_factory=list)
     data_quality_flags: list[str] = Field(default_factory=list)
@@ -304,6 +361,7 @@ class ArtifactManifest(StrictReportModel):
     report_id: str
     parent_run_id: UUID
     report_profile: ReportProfile
+    report_audience: ReportAudience = ReportAudience.internal
     snapshot_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
     artifacts: list[ArtifactRecord]
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

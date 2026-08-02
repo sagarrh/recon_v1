@@ -21,6 +21,11 @@ class ReportProfile(StrEnum):
     detailed = "detailed"
 
 
+class ReportAudience(StrEnum):
+    client = "client"
+    internal = "internal"
+
+
 class ProfileSettings(StrictConfigModel):
     max_decision_cards: int = Field(ge=1, le=100)
     max_recommendations: int = Field(ge=1, le=100)
@@ -36,6 +41,7 @@ class ProfileSettings(StrictConfigModel):
 
 class ReportDefaults(StrictConfigModel):
     default_profile: ReportProfile = ReportProfile.decision
+    default_audience: ReportAudience = ReportAudience.client
     write_latest_copies: bool = True
     allow_partial: bool = False
     narrative_mode: Literal["reuse_validated"] = "reuse_validated"
@@ -47,7 +53,7 @@ class ProfileCollection(StrictConfigModel):
 
 
 class ReportingConfig(StrictConfigModel):
-    config_version: Literal["1.0"] = "1.0"
+    config_version: Literal["1.0", "1.1"] = "1.1"
     report: ReportDefaults
     profiles: ProfileCollection
 
@@ -71,6 +77,7 @@ class ReportingConfig(StrictConfigModel):
 class ResolvedReportConfig(StrictConfigModel):
     config: ReportingConfig
     profile: ReportProfile
+    audience: ReportAudience
     profile_settings: ProfileSettings
     config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source: str
@@ -97,6 +104,7 @@ def load_report_config(
     *,
     config_path: Path | None = None,
     profile: ReportProfile | str | None = None,
+    audience: ReportAudience | str | None = None,
 ) -> ResolvedReportConfig:
     """Load strict report configuration with CLI > env > TOML precedence."""
     explicit_env_path = os.getenv("AIVC_REPORT_CONFIG_PATH")
@@ -117,11 +125,16 @@ def load_report_config(
             source = "packaged_default"
 
     env_profile = os.getenv("AIVC_REPORT_PROFILE")
+    env_audience = os.getenv("AIVC_REPORT_AUDIENCE")
     selected_profile = ReportProfile(profile or env_profile or config.report.default_profile)
+    selected_audience = ReportAudience(
+        audience or env_audience or config.report.default_audience
+    )
     settings = getattr(config.profiles, selected_profile.value)
     return ResolvedReportConfig(
         config=config,
         profile=selected_profile,
+        audience=selected_audience,
         profile_settings=settings,
         config_hash=_canonical_hash(config),
         source=source,

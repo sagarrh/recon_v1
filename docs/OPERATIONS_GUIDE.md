@@ -212,27 +212,40 @@ output/aprio/combined-signal-bundle.json
 The combined bundle is the full structured audit source. For the unified,
 client-facing report, use the next section.
 
-## 9. Generate the unified final report
+## 9. Generate audience-specific reports from persisted evidence
 
-The normal operator command runs Citation and Recon once under a single parent
-run and then creates the final JSON, Markdown, and HTML report:
-
-```powershell
-uv run aivc report generate --company "Aprio" --profile decision
-```
-
-For production, prefer the exact authoritative UUID. This avoids any ambiguity
-when two database clients share the same display name:
+Evidence collection and report presentation are separate. First run the
+producers when fresh evidence is required:
 
 ```powershell
-uv run aivc report generate --client-id "CLIENT-UUID" --profile decision
+uv run aivc run --company "Aprio"
 ```
 
-Use `--profile detailed` for full SOV company tables and history, query-level
-visibility, expanded citation and Recon findings, recommendations, run history,
-methodology, and evidence appendices. The decision profile deliberately keeps a
-smaller rendered view. The underlying measurements and publication filters are
-identical in both profiles.
+Then generate any report combination from that persisted parent without
+rerunning Citation, Recon, page fetching, or LLM investigation:
+
+```powershell
+uv run aivc report generate --company "Aprio" --profile decision --audience client
+uv run aivc report generate --company "Aprio" --profile detailed --audience client
+uv run aivc report generate --company "Aprio" --profile decision --audience internal
+uv run aivc report generate --company "Aprio" --profile detailed --audience internal
+```
+
+For exact reproducibility, prefer `--parent-run-id`. For exact client selection,
+prefer `--client-id`; a duplicated company name fails rather than guessing.
+
+`decision` and `detailed` are analysis-depth profiles. They do not represent
+audiences. `client` and `internal` are presentation audiences. A detailed client
+report therefore uses deeper evidence while still showing executive narrative,
+limited tracked-company context, implications, competitive priorities, an
+action roadmap, leadership decisions, and a strategic conclusion. A detailed
+internal report exposes the granular analyst tables and audit material.
+
+Only this explicit command performs a fresh producer run:
+
+```powershell
+uv run aivc report generate --company "Aprio" --profile detailed --audience client --refresh-data
+```
 
 Final-report generation runs a packaged, parameterized version of
 `recon_query_for_report.sql` using the exact client UUID, reporting week, and
@@ -247,6 +260,7 @@ The default profile is controlled by `config/reporting.toml`, or by:
 
 ```dotenv
 AIVC_REPORT_PROFILE=decision
+AIVC_REPORT_AUDIENCE=client
 AIVC_REPORT_CONFIG_PATH=
 ```
 
@@ -257,13 +271,16 @@ when the report is complete, or when `--allow-partial` is explicitly supplied.
 Expected additional files:
 
 ```text
-output/aprio/final-report.json
-output/aprio/final-report.md
-output/aprio/final-report.html
-output/aprio/runs/<parent-run-id>/<profile>/artifact-manifest.json
-output/aprio/runs/<parent-run-id>/<profile>/final-report.json
-output/aprio/runs/<parent-run-id>/<profile>/final-report.md
-output/aprio/runs/<parent-run-id>/<profile>/final-report.html
+output/aprio/client/final-report.json
+output/aprio/client/final-report.md
+output/aprio/client/final-report.html
+output/aprio/internal/final-report.json
+output/aprio/internal/final-report.md
+output/aprio/internal/final-report.html
+output/aprio/runs/<parent-run-id>/<profile>/<audience>/artifact-manifest.json
+output/aprio/runs/<parent-run-id>/<profile>/<audience>/final-report.json
+output/aprio/runs/<parent-run-id>/<profile>/<audience>/final-report.md
+output/aprio/runs/<parent-run-id>/<profile>/<audience>/final-report.html
 ```
 
 Inspect, validate, or rerender an exact historical parent without rerunning
@@ -271,14 +288,14 @@ either producer:
 
 ```powershell
 uv run aivc report show --parent-run-id "PARENT-UUID"
-uv run aivc report validate --path "output/aprio/final-report.json"
-uv run aivc report render --parent-run-id "PARENT-UUID" --profile detailed --allow-partial
+uv run aivc report validate --path "output/aprio/client/final-report.json"
+uv run aivc report render --parent-run-id "PARENT-UUID" --profile detailed --audience client --allow-partial
 ```
 
 Historical rendering always reads the Citation and producer bundles attached to
-that parent run. If the parent already has a schema 1.1 report snapshot, it also
+that parent run. If the parent already has a schema 1.2 report snapshot, it also
 reuses that snapshot's exact full Recon reporting payload. For an older parent
-that predates schema 1.1, the renderer performs one read-only reconstruction
+that predates schema 1.2, the renderer performs one read-only reconstruction
 bounded to the parent's reporting week, then persists it for deterministic
 future rerenders.
 

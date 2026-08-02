@@ -6,6 +6,7 @@ from uuid import UUID
 
 from aivc.contracts.models import SignalBundle, stable_id
 from aivc.reporting.cards import build_decision_cards
+from aivc.reporting.client_presentation import build_client_presentation
 from aivc.reporting.config import ResolvedReportConfig
 from aivc.reporting.metrics import metric_definitions
 from aivc.reporting.models import (
@@ -513,9 +514,10 @@ def build_final_report_snapshot(
     idempotency_key = stable_id(
         parent_run_id,
         config.profile,
+        config.audience,
         config.config_hash,
         input_checksum,
-        "1.1",
+        "1.2",
     )
     snapshot = FinalReportSnapshot(
         report_id=stable_id("final-report", idempotency_key),
@@ -525,6 +527,7 @@ def build_final_report_snapshot(
         config=ReportConfigMetadata(
             config_version=config.config.config_version,
             report_profile=config.profile,
+            report_audience=config.audience,
             report_config_hash=config.config_hash,
             source=config.source,
             effective_profile=config.profile_settings,
@@ -548,6 +551,14 @@ def build_final_report_snapshot(
         recon_run_history=recon_runs,
         excluded_topics=excluded_topics,
         recon_reporting=recon_report,
+        client_presentation=build_client_presentation(
+            client_name=client.canonical_name,
+            topics=topics,
+            cards=cards,
+            recommendations=recon_recommendations,
+            signals=recon_signals,
+            profile=config.profile,
+        ),
         decision_cards=cards,
         consolidated_actions=consolidated,
         data_quality_flags=flags + list(publication.blockers),

@@ -43,7 +43,8 @@ def write_final_report_artifacts(
     snapshot.verify_checksum()
     slug = slugify(snapshot.client.canonical_name)
     profile = snapshot.config.report_profile.value
-    run_dir = output_root / slug / "runs" / str(snapshot.parent_run_id) / profile
+    audience = snapshot.config.report_audience.value
+    run_dir = output_root / slug / "runs" / str(snapshot.parent_run_id) / profile / audience
     paths = {
         "json": run_dir / "final-report.json",
         "markdown": run_dir / "final-report.md",
@@ -67,6 +68,7 @@ def write_final_report_artifacts(
         report_id=snapshot.report_id,
         parent_run_id=snapshot.parent_run_id,
         report_profile=snapshot.config.report_profile,
+        report_audience=snapshot.config.report_audience,
         snapshot_checksum=str(snapshot.checksum),
         artifacts=records,
     )
@@ -76,7 +78,7 @@ def write_final_report_artifacts(
     )
 
     if write_latest_copies:
-        latest_dir = output_root / slug
+        latest_dir = output_root / slug / audience
         for name, content in rendered.items():
             extension = "md" if name == "markdown" else name
             _atomic_write(latest_dir / f"final-report.{extension}", content)
@@ -89,7 +91,11 @@ def refresh_latest_artifacts(
 ) -> dict[str, Path]:
     """Refresh convenient latest copies after database persistence succeeds."""
     snapshot.verify_checksum()
-    latest_dir = output_root / slugify(snapshot.client.canonical_name)
+    latest_dir = (
+        output_root
+        / slugify(snapshot.client.canonical_name)
+        / snapshot.config.report_audience.value
+    )
     rendered = {
         "json": render_json(snapshot),
         "md": render_markdown(snapshot),

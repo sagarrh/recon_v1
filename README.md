@@ -101,7 +101,7 @@ uv run aivc db check
 uv run aivc db audit
 uv run aivc citations generate --company "Aprio"
 uv run aivc run --company "Aprio"
-uv run aivc report generate --company "Aprio" --profile decision
+uv run aivc report generate --company "Aprio" --profile decision --audience client
 ```
 
 `aivc citations generate` runs independently and writes the established
@@ -123,13 +123,17 @@ seven-part payload (`client`, `clusters`, `sov`, `signals`, executive summary,
 recommendations, and run history) is preserved under `recon_reporting` in the
 JSON snapshot.
 
-`aivc report generate` turns those exact Citation and Recon sources into
-client-facing JSON, Markdown, and HTML. The `decision` profile shows a compact
-selection of the strongest facts. The `detailed` profile additionally renders
-full SOV company tables and history, query-level visibility, Recon signal and
-recommendation detail, run history, methodology, and evidence appendices. Both
-profiles retain the complete Recon query payload and apply the same quality
-gate; NOISE data remains auditable in JSON but is not presented as a finding.
+By default, `aivc report generate` resolves the newest complete persisted parent
+for the company and does not rerun either producer. Add `--refresh-data` only
+when a new Citation + Recon execution is deliberately required.
+
+Analysis depth and report audience are independent. `--profile
+decision|detailed` controls how much validated evidence is selected. `--audience
+client|internal` controls how it is communicated. Client output follows an
+executive presentation structure; internal output retains full SOV tables,
+queries, run history, methodology, and evidence appendices. Both retain the
+complete Recon query payload in structured JSON and apply the same quality
+gate. NOISE data remains auditable but is never presented as a finding.
 The existing citation and Recon reports remain independently usable.
 The legacy Recon LLM citation analyzer is off by default and can be
 enabled only with `AIVC_RECON_LEGACY_AI_ANALYSIS_ENABLED=true`.

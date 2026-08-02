@@ -20,7 +20,7 @@ from aivc.reporting.artifacts import (
     refresh_latest_artifacts,
     write_final_report_artifacts,
 )
-from aivc.reporting.config import ReportProfile, load_report_config
+from aivc.reporting.config import ReportAudience, ReportProfile, load_report_config
 from aivc.reporting.models import ArtifactManifest, FinalReportSnapshot
 from aivc.reporting.narrative import ReuseValidatedNarrative
 from aivc.reporting.snapshot import build_final_report_snapshot
@@ -93,6 +93,7 @@ def run_final_report_pipeline(
     company_name: str | None = None,
     client_id: UUID | None = None,
     profile: ReportProfile | str | None = None,
+    audience: ReportAudience | str | None = None,
     config_path: Path | None = None,
     allow_partial: bool | None = None,
 ) -> FinalReportRunResult:
@@ -102,7 +103,11 @@ def run_final_report_pipeline(
         raise RuntimeError(
             "OPENROUTER_API_KEY is required for the Recon synthesis stages."
         )
-    config = load_report_config(config_path=config_path, profile=profile)
+    config = load_report_config(
+        config_path=config_path,
+        profile=profile,
+        audience=audience,
+    )
     integrated = run_integrated_pipeline(
         settings,
         shared_settings,
@@ -234,13 +239,18 @@ def render_historical_report(
     settings: Settings,
     *,
     parent_run_id: UUID,
-    profile: ReportProfile | str,
+    profile: ReportProfile | str | None = None,
+    audience: ReportAudience | str | None = None,
     config_path: Path | None = None,
     allow_partial: bool | None = None,
 ) -> FinalReportRunResult:
     """Render exact persisted sources without rerunning either producer."""
     apply_migrations(settings)
-    config = load_report_config(config_path=config_path, profile=profile)
+    config = load_report_config(
+        config_path=config_path,
+        profile=profile,
+        audience=audience,
+    )
     partial_allowed = (
         allow_partial if allow_partial is not None else config.config.report.allow_partial
     )
@@ -255,7 +265,11 @@ def render_historical_report(
         None,
     )
     citation_report = _citation_report_from_bundle(reference.json_path if reference else None)
-    previous_snapshot = load_final_report_by_parent(settings, parent_run_id)
+    previous_snapshot = load_final_report_by_parent(
+        settings,
+        parent_run_id,
+        profile=config.profile.value,
+    )
     if (
         previous_snapshot is not None
         and previous_snapshot.recon_reporting is not None

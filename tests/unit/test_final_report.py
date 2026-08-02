@@ -22,12 +22,17 @@ from aivc.database.recon_reporting import (
     recon_report_sql,
 )
 from aivc.reporting.artifacts import refresh_latest_artifacts, write_final_report_artifacts
-from aivc.reporting.config import ReportProfile, load_report_config
+from aivc.reporting.client_presentation import build_client_presentation
+from aivc.reporting.config import ReportAudience, ReportProfile, load_report_config
 from aivc.reporting.models import (
+    ClientPresentation,
     FinalReportSnapshot,
     FinalReportStatus,
+    ReconRecommendationView,
     ReconReportingPayload,
     ReportConfigMetadata,
+    SovCompanyPosition,
+    TopicPerformance,
 )
 from aivc.reporting.quality import assess_publication
 from aivc.reporting.renderers import render_html, render_json, render_markdown
@@ -134,8 +139,11 @@ def _recon_reporting_payload() -> dict[str, object]:
     }
 
 
-def _snapshot(profile: ReportProfile = ReportProfile.decision) -> FinalReportSnapshot:
-    config = load_report_config(profile=profile)
+def _snapshot(
+    profile: ReportProfile = ReportProfile.decision,
+    audience: ReportAudience = ReportAudience.client,
+) -> FinalReportSnapshot:
+    config = load_report_config(profile=profile, audience=audience)
     return FinalReportSnapshot(
         report_id="report-test",
         idempotency_key="idempotency-test",
@@ -148,6 +156,7 @@ def _snapshot(profile: ReportProfile = ReportProfile.decision) -> FinalReportSna
         config=ReportConfigMetadata(
             config_version=config.config.config_version,
             report_profile=config.profile,
+            report_audience=config.audience,
             report_config_hash=config.config_hash,
             source=config.source,
             effective_profile=config.profile_settings,
@@ -161,6 +170,12 @@ def _snapshot(profile: ReportProfile = ReportProfile.decision) -> FinalReportSna
         status=FinalReportStatus.complete,
         headline="Measured report",
         executive_summary="Only validated evidence is included.",
+        client_presentation=ClientPresentation(
+            executive_narrative="Measured executive narrative.",
+            main_implication_title="Maintain the baseline",
+            main_implication="Continue monitoring validated evidence.",
+            strategic_conclusion="Measure progress in the next cycle.",
+        ),
     ).sealed()
 
 
@@ -177,6 +192,17 @@ def test_config_profile_override_and_detailed_is_broader(
         detailed.profile_settings.max_decision_cards
         >= explicit.profile_settings.max_decision_cards
     )
+    internal = load_report_config(
+        profile=ReportProfile.detailed,
+        audience=ReportAudience.internal,
+    )
+    client = load_report_config(
+        profile=ReportProfile.detailed,
+        audience=ReportAudience.client,
+    )
+    assert internal.profile_settings == client.profile_settings
+    assert internal.audience is ReportAudience.internal
+    assert client.audience is ReportAudience.client
 
 
 def test_packaged_recon_query_is_parameterized_and_read_only() -> None:
@@ -289,6 +315,18 @@ def test_renderers_validate_checksum_escape_html_and_keep_json_exact() -> None:
     assert payload["client"]["canonical_name"].startswith("Aprio")
 
 
+def test_audience_changes_presentation_without_changing_profile() -> None:
+    client = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    internal = _snapshot(ReportProfile.detailed, ReportAudience.internal)
+    client_html = render_html(client)
+    internal_html = render_html(internal)
+
+    assert "Strategic conclusion" in client_html
+    assert "Query-level detail" not in client_html
+    assert "Query-level detail" in internal_html
+    assert client.config.effective_profile == internal.config.effective_profile
+
+
 def test_artifacts_are_atomic_manifested_and_validated(tmp_path: Path) -> None:
     snapshot = _snapshot()
     manifest, paths = write_final_report_artifacts(
@@ -304,6 +342,8 @@ def test_artifacts_are_atomic_manifested_and_validated(tmp_path: Path) -> None:
     assert validated.checksum == snapshot.checksum
     latest = refresh_latest_artifacts(tmp_path, snapshot)
     assert set(latest) == {"json", "md", "html"}
+    assert snapshot.config.report_audience.value in paths["html"].parts
+    assert snapshot.config.report_audience.value in latest["html"].parts
 
 
 def test_schema_10_snapshot_remains_readable_for_historical_upgrade() -> None:
@@ -316,8 +356,10 @@ def test_schema_10_snapshot_remains_readable_for_historical_upgrade() -> None:
         "recon_run_history",
         "excluded_topics",
         "recon_reporting",
+        "client_presentation",
     ):
         payload.pop(field)
+    payload["config"].pop("report_audience")
     canonical = {
         key: value
         for key, value in payload.items()
@@ -343,6 +385,69 @@ def test_checked_in_migration_copies_are_identical() -> None:
     assert (root / "migrations/0005_aivc_final_reports.sql").read_bytes() == (
         root / "src/ai_visibility/resources/migrations/0005_aivc_final_reports.sql"
     ).read_bytes()
+    assert (root / "migrations/0006_aivc_report_audience.sql").read_bytes() == (
+        root / "src/ai_visibility/resources/migrations/0006_aivc_report_audience.sql"
+    ).read_bytes()
+    assert (root / "config/reporting.toml").read_bytes() == (
+        root / "src/aivc/resources/config/reporting.toml"
+    ).read_bytes()
+    assert (root / "schemas/final_report_snapshot.schema.json").read_bytes() == (
+        root / "src/aivc/resources/schemas/final_report_snapshot.schema.json"
+    ).read_bytes()
+
+
+def test_client_presentation_summarizes_instead_of_dumping_market_table() -> None:
+    topic = TopicPerformance(
+        cluster_id="tax",
+        cluster_label="Tax advisory",
+        current_client_sov=7.5,
+        client_rank=3,
+        market_size=20,
+        leader_name="Competitor 1",
+        leader_sov=15.0,
+        gap_to_leader=7.5,
+        positions=[
+            SovCompanyPosition(
+                company_name="Competitor 1", sov=15.0, rank=1, is_tracked=True
+            ),
+            SovCompanyPosition(
+                company_name="Aprio", sov=7.5, rank=3, is_client=True, is_tracked=True
+            ),
+            *[
+                SovCompanyPosition(
+                    company_name=f"Market company {number}", sov=5.0, rank=number + 3
+                )
+                for number in range(10)
+            ],
+        ],
+    )
+    recommendation = ReconRecommendationView(
+        recommendation_id="rec-1",
+        cluster_id="tax",
+        cluster_name="Tax advisory",
+        competitor="Competitor 1",
+        priority="high",
+        confidence="medium",
+        summary="Competitor 1 has the strongest measured position.",
+        actions=["Publish authoritative tax-advisory proof."],
+    )
+    presentation = build_client_presentation(
+        client_name="Aprio",
+        topics=[topic],
+        cards=[],
+        recommendations=[recommendation],
+        signals=[],
+        profile=ReportProfile.detailed,
+    )
+
+    assert presentation.topics[0].client_sov == 7.5
+    assert [item.company_name for item in presentation.topics[0].tracked_positions] == [
+        "Competitor 1",
+        "Aprio",
+    ]
+    assert presentation.priorities[0].actions == [
+        "Publish authoritative tax-advisory proof."
+    ]
 
 
 def test_recon_recommendation_requires_a_publishable_recon_signal() -> None:

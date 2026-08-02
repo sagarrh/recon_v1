@@ -26,6 +26,7 @@
     "recon_run_history",
     "excluded_topics",
     "recon_reporting",
+    "client_presentation",
     "decision_cards",
     "consolidated_actions",
     "data_quality_flags",
@@ -36,7 +37,7 @@
     "checksum"
   ],
   "properties": {
-    "schema_version": {"const": "1.1"},
+    "schema_version": {"const": "1.2"},
     "report_id": {"type": "string", "minLength": 1},
     "idempotency_key": {"type": "string", "minLength": 1},
     "parent_run_id": {"type": "string", "format": "uuid"},
@@ -61,6 +62,7 @@
     "recon_run_history": {"type": "array"},
     "excluded_topics": {"type": "array"},
     "recon_reporting": {"type": ["object", "null"]},
+    "client_presentation": {"type": "object"},
     "decision_cards": {"type": "array"},
     "consolidated_actions": {"type": "array"},
     "data_quality_flags": {"type": "array"},

@@ -12,14 +12,17 @@ from ai_visibility.config.settings import get_settings
 from ai_visibility.database.validation import check_database
 from aivc.config import get_aivc_settings
 from aivc.database import audit_shared_schema
-from aivc.database.final_reports import load_final_report_by_parent
+from aivc.database.final_reports import (
+    load_final_report_by_parent,
+    resolve_latest_evidence_parent,
+)
 from aivc.orchestration import (
     render_historical_report,
     run_final_report_pipeline,
     run_integrated_pipeline,
 )
 from aivc.producers import generate_citation_bundle
-from aivc.reporting.config import ReportProfile
+from aivc.reporting.config import ReportAudience, ReportProfile
 from aivc.reporting.validation import validate_final_report_file
 
 app = typer.Typer(
@@ -29,7 +32,7 @@ app = typer.Typer(
 )
 db_app = typer.Typer(help="Validate shared database configuration.")
 citations_app = typer.Typer(help="Run the AI citation producer independently.")
-report_app = typer.Typer(help="Generate and inspect unified client-facing reports.")
+report_app = typer.Typer(help="Generate and inspect audience-specific unified reports.")
 app.add_typer(db_app, name="db")
 app.add_typer(citations_app, name="citations")
 app.add_typer(report_app, name="report")
@@ -129,6 +132,7 @@ def _report_result(result: Any) -> dict[str, Any]:
         "report_id": snapshot.report_id,
         "database_report_id": result.database_report_id,
         "profile": snapshot.config.report_profile,
+        "audience": snapshot.config.report_audience,
         "config_hash": snapshot.config.report_config_hash,
         "snapshot_checksum": snapshot.checksum,
         "source_bundle_ids": snapshot.source_bundle_ids,
@@ -151,6 +155,13 @@ def _report_result(result: Any) -> dict[str, Any]:
 
 @report_app.command("generate")
 def report_generate(
+    parent_run_id: Annotated[
+        UUID | None,
+        typer.Option(
+            "--parent-run-id",
+            help="Exact persisted evidence parent. No producer rerun is performed.",
+        ),
+    ] = None,
     company: Annotated[
         str | None, typer.Option("--company", help="Exact client company name.")
     ] = None,
@@ -161,6 +172,10 @@ def report_generate(
         ReportProfile | None,
         typer.Option("--profile", help="Report detail profile."),
     ] = None,
+    audience: Annotated[
+        ReportAudience | None,
+        typer.Option("--audience", help="Client or internal presentation."),
+    ] = None,
     config: Annotated[
         Path | None, typer.Option("--config", help="Reporting TOML configuration path."),
     ] = None,
@@ -168,21 +183,62 @@ def report_generate(
         bool | None,
         typer.Option("--allow-partial/--no-allow-partial", help="Allow partial publication."),
     ] = None,
+    refresh_data: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-data",
+            help="Explicitly rerun Citation and Recon before creating the report.",
+        ),
+    ] = False,
 ) -> None:
-    """Run Citation and Recon once, then create the unified final report."""
-    if (company is None) == (client_id is None):
-        raise typer.BadParameter("Provide exactly one of --company or --client-id.")
-    result = _run(
-        lambda: run_final_report_pipeline(
-            get_settings(),
-            get_aivc_settings(),
-            company_name=company,
-            client_id=client_id,
-            profile=profile,
-            config_path=config,
-            allow_partial=allow_partial,
+    """Generate a report from persisted evidence; refresh producers only on request."""
+    if refresh_data:
+        if parent_run_id is not None:
+            raise typer.BadParameter("--refresh-data cannot be combined with --parent-run-id.")
+        if (company is None) == (client_id is None):
+            raise typer.BadParameter(
+                "With --refresh-data, provide exactly one of --company or --client-id."
+            )
+        result = _run(
+            lambda: run_final_report_pipeline(
+                get_settings(),
+                get_aivc_settings(),
+                company_name=company,
+                client_id=client_id,
+                profile=profile,
+                audience=audience,
+                config_path=config,
+                allow_partial=allow_partial,
+            )
         )
-    )
+    else:
+        if parent_run_id is not None and (company is not None or client_id is not None):
+            raise typer.BadParameter(
+                "Use --parent-run-id by itself, or identify the latest evidence by company/client."
+            )
+        if parent_run_id is None:
+            if (company is None) == (client_id is None):
+                raise typer.BadParameter(
+                    "Provide --parent-run-id, --company, or --client-id. "
+                    "Add --refresh-data only when a new producer run is intended."
+                )
+            parent_run_id = _run(
+                lambda: resolve_latest_evidence_parent(
+                    get_settings(),
+                    client_id=client_id,
+                    company_name=company,
+                )
+            )
+        result = _run(
+            lambda: render_historical_report(
+                get_settings(),
+                parent_run_id=parent_run_id,
+                profile=profile,
+                audience=audience,
+                config_path=config,
+                allow_partial=allow_partial,
+            )
+        )
     _print(_report_result(result))
 
 
@@ -190,6 +246,9 @@ def report_generate(
 def report_render(
     parent_run_id: Annotated[UUID, typer.Option("--parent-run-id")],
     profile: Annotated[ReportProfile, typer.Option("--profile")] = ReportProfile.decision,
+    audience: Annotated[
+        ReportAudience, typer.Option("--audience")
+    ] = ReportAudience.client,
     config: Annotated[Path | None, typer.Option("--config")] = None,
     allow_partial: Annotated[
         bool | None,
@@ -202,6 +261,7 @@ def report_render(
             get_settings(),
             parent_run_id=parent_run_id,
             profile=profile,
+            audience=audience,
             config_path=config,
             allow_partial=allow_partial,
         )
@@ -213,6 +273,7 @@ def report_render(
 def report_show(
     parent_run_id: Annotated[UUID, typer.Option("--parent-run-id")],
     profile: Annotated[ReportProfile | None, typer.Option("--profile")] = None,
+    audience: Annotated[ReportAudience | None, typer.Option("--audience")] = None,
 ) -> None:
     """Show concise metadata for a persisted final report."""
     snapshot = _run(
@@ -220,6 +281,7 @@ def report_show(
             get_settings(),
             parent_run_id,
             profile=profile.value if profile else None,
+            audience=audience.value if audience else None,
         )
     )
     if snapshot is None:
@@ -231,6 +293,7 @@ def report_show(
             "parent_run_id": snapshot.parent_run_id,
             "client": snapshot.client.model_dump(mode="json"),
             "profile": snapshot.config.report_profile,
+            "audience": snapshot.config.report_audience,
             "checksum": snapshot.checksum,
             "decision_card_count": len(snapshot.decision_cards),
             "action_count": len(snapshot.consolidated_actions),
