@@ -1,41 +1,33 @@
-# IMPORTANT: Final Python Backend-Only Scope
+# AI Visibility and Competitive Intelligence Backend
 
-This repository contains a Python 3.12+ backend-only CLI application. There is no frontend.
+Python 3.12+ backend-only CLI combining AI Citation analysis with Recon competitive
+intelligence. There is no frontend.
 
----
-
-# AI Visibility Signal Generator — Codex Build Pack
-
-This pack is the source of truth for building a detailed **Company Intelligence Report** from one input:
+It builds a detailed client-facing report from one input:
 
 ```json
 { "company_name": "Aprio" }
 ```
 
-The entered name always represents a **client company**, not an arbitrary competitor.
+The company name always represents a **client**, not an arbitrary competitor.
 
 The system resolves the client, loads all of its valid historical monitoring runs, analyzes every provider/query/cluster over time, inspects client and competitor visibility, compares exact citation URLs, selectively retrieves cited pages, verifies page-level company mentions and content changes, and returns a detailed confidence-scored company intelligence report.
 
-## Read in this order
+## Project map
 
-1. `docs/01_PRODUCT_REQUIREMENTS.md`
-2. `docs/02_DOMAIN_CONTEXT_AND_KNOWN_FACTS.md`
-3. `docs/03_SYSTEM_ARCHITECTURE.md`
-4. `docs/04_DATA_MODEL_AND_SUPABASE.md`
-5. `docs/05_PIPELINES_AND_ALGORITHMS.md`
-6. `docs/06_ATTRIBUTION_AND_CONFIDENCE.md`
-7. `docs/07_REPORT_CONTRACT_AND_API.md`
-8. `docs/08_SCRAPING_AND_PAGE_INTELLIGENCE.md`
-9. `docs/09_TEST_PLAN_AND_ACCEPTANCE.md`
-10. `docs/10_IMPLEMENTATION_ROADMAP.md`
-11. `docs/11_SECURITY_OBSERVABILITY_RUNBOOK.md`
-12. `docs/12_CODEX_KICKOFF_PROMPT.md`
+- `src/ai_visibility/` — Citation normalization, analysis, page intelligence, and reports.
+- `src/scout/` — integrated Recon V1 engine.
+- `src/aivc/` — shared contracts, orchestration, compact context, and final report.
+- `migrations/` — application-managed PostgreSQL migrations.
+- `config/` — operator-editable report configuration.
+- `schemas/` — public JSON Schema and API contracts.
+- `fixtures/` — canonical test evidence.
+- `tests/` — unit and Recon integration tests.
+- `output/` — ignored generated reports and database backups.
+- `docs/` — current guides, architecture, references, plans, and archived history.
 
-Supporting material:
-
-- `sql/` — reference SQL and proposed migrations
-- `fixtures/` — real Aprio-derived canonical fixtures
-- `schemas/` — machine-readable report and API schemas
+Start with [`docs/README.md`](docs/README.md), then follow the
+[`Operations Guide`](docs/guides/OPERATIONS_GUIDE.md).
 
 ## Non-negotiable product rules
 
@@ -93,8 +85,8 @@ normalization, report generation, and page queueing is idempotent.
 
 ### Integrated citation + Recon pipeline
 
-For the complete operator walkthrough, see
-[`docs/OPERATIONS_GUIDE.md`](docs/OPERATIONS_GUIDE.md).
+For the complete operator walkthrough, see the
+[`Operations Guide`](docs/guides/OPERATIONS_GUIDE.md).
 
 ```powershell
 uv run aivc db check
@@ -116,8 +108,8 @@ output/aprio/recon-signal-bundle.json
 ```
 
 The database remains the complete audit ledger. During final reporting, the
-application executes the packaged, parameterized equivalent of
-`recon_query_for_report.sql` in a PostgreSQL read-only transaction, reduces its
+application executes the packaged Recon report query in a PostgreSQL read-only
+transaction, reduces its
 result and the Citation evidence into two compact, schema-validated inputs, and
 writes the exact prompt envelope used for narrative generation.
 

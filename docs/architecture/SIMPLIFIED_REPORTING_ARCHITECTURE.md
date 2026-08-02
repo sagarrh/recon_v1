@@ -50,8 +50,8 @@ not rerun either producer.
 | `aivc_delivery_log` | Proposed drop | Empty and has no runtime code references |
 
 The combined signal bundle and legacy profile/audience runtime branches have
-been removed. See `DATABASE_AND_CODE_CLEANUP_AUDIT.md` for the reviewed,
-explicitly gated database cleanup.
+been removed. The completed cleanup audit is archived under
+`docs/archive/audits/`.
 
 ## LLM boundary
 

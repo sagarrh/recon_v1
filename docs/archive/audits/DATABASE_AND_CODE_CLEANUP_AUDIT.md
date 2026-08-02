@@ -47,7 +47,7 @@ contained ten final-report variants for two parents. Only one report format is n
 
 ## Proposed destructive database cleanup
 
-The review-only script is `sql/aivc_cleanup_20260802_review.sql`. It proposes:
+The executed, archived script is `aivc_cleanup_20260802_review.sql`. It performed:
 
 1. Preserve parent `7907efe8-2b44-49cd-bcc9-f205bf460858`.
 2. Delete the five superseded, failed, or orphaned AIVC parent runs and their dependent stages.

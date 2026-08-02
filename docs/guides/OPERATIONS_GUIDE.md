@@ -18,8 +18,8 @@ Set-Location "C:\Users\harso\Desktop\AIVC\ai_visibility_signal_generator_python_
 ```
 
 Both `ai-visibility` and `aivc` load the `.env` file from this working
-directory. Do not configure the old imported `Scout-Agent-AIVC/.env`; that copy
-is retained only as reference and is not the integrated runtime.
+directory. Recon runs from the integrated `src/scout` package, so there is no
+second Recon project or second `.env` to configure.
 
 ## 2. One-time environment setup
 
@@ -235,8 +235,8 @@ prefer `--client-id`; a duplicated company name fails rather than guessing.
 The public CLI now produces one product: a detailed client-facing report. The
 former decision/internal combinations are no longer CLI options.
 
-Final-report generation runs a packaged, parameterized version of
-`recon_query_for_report.sql` using the exact client UUID, reporting week, and
+Final-report generation runs the packaged, parameterized Recon report query
+using the exact client UUID, reporting week, and
 configured history window. That query is executed after `SET TRANSACTION READ
 ONLY`; it fetches data and cannot modify the database. The complete source
 records remain in the database ledger. Only compact, report-ready Citation and

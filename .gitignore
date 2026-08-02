@@ -12,7 +12,3 @@ output/*
 !output/.gitkeep
 dist/
 build/
-
-# Preserved source import. The integrated package is copied into src/scout.
-# Keep the nested repository and its generated artifacts out of root history.
-Scout-Agent-AIVC/
