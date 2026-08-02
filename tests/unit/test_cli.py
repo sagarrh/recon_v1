@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from ai_visibility.cli.app import app
 from ai_visibility.config.settings import Settings
 from ai_visibility.normalization.models import RawMonitoringRun
+from aivc.cli.app import app as aivc_app
 
 
 def test_unscoped_backfill_does_not_guess_client_company(
@@ -44,3 +45,11 @@ def test_unscoped_backfill_does_not_guess_client_company(
     assert result.exit_code == 0, result.output
     assert persisted_client_names == [None]
     assert '"client_relationships_inferred": false' in result.output.casefold()
+
+
+def test_final_report_cli_has_one_detailed_client_product() -> None:
+    result = CliRunner().invoke(aivc_app, ["report", "generate", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--profile" not in result.output
+    assert "--audience" not in result.output
+    assert "--refresh-data" in result.output

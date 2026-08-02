@@ -66,7 +66,7 @@
   <header class="cover">
     <div><span class="eyebrow">Confidential client report</span><button class="print" type="button">Print / Save as PDF</button></div>
     <div><div class="eyebrow">{{ report.client.canonical_name }}</div><h1>AI Visibility &amp;<br>Competitive Intelligence Report</h1><p>This report translates monitored AI visibility, citation, and competitive evidence into the positions and actions that deserve leadership attention.</p></div>
-    <div class="cover-meta"><div><small>Report status</small><b>{{ report.status.value }}</b></div><div><small>Analysis depth</small><b>{{ report.config.report_profile.value }}</b></div><div><small>Audience</small><b>{{ report.config.report_audience.value }}</b></div><div><small>Period end</small><b>{{ report.analysis_period.end | date }}</b></div></div>
+    <div class="cover-meta"><div><small>Report status</small><b>{{ report.status.value }}</b></div><div><small>Period start</small><b>{{ report.analysis_period.start | date }}</b></div><div><small>Period end</small><b>{{ report.analysis_period.end | date }}</b></div><div><small>Evidence streams</small><b>AI Citations + Recon</b></div></div>
   </header>
 
   {% set client = report.client_presentation %}
@@ -93,6 +93,6 @@
 
   <section><header class="section-head"><span>06</span><div><h2>Strategic conclusion</h2></div></header><article class="card conclusion"><p>{{ client.strategic_conclusion }}</p></article></section>
 
-  <section><header class="section-head"><span>07</span><div><h2>Methodology and data notes</h2></div></header><article class="card notes"><p>SOV is the weekly Recon share-of-voice measurement for a company and monitored topic. Literal visibility is the share of valid monitored answers that explicitly name the client. These metrics are deliberately kept separate.</p>{% if report.limitations %}<p>This report is {{ report.status.value }} and carries {{ report.limitations | length }} disclosed data-quality limitation(s). The internal report and structured JSON retain the detailed evidence and audit trail.</p>{% endif %}</article></section>
-  <footer>{{ report.client.canonical_name }} · {{ report.config.report_profile.value }} analysis · {{ report.config.report_audience.value }} audience · Report {{ report.report_id }}</footer>
+  <section><header class="section-head"><span>07</span><div><h2>Methodology and data notes</h2></div></header><article class="card notes"><p>SOV is the weekly Recon share-of-voice measurement for a company and monitored topic. Literal visibility is the share of valid monitored answers that explicitly name the client. These metrics are deliberately kept separate.</p>{% if report.limitations %}<p>This report is {{ report.status.value }} and carries {{ report.limitations | length }} disclosed data-quality limitation(s). The structured input snapshots and database ledger retain the supporting audit trail.</p>{% endif %}</article></section>
+  <footer>{{ report.client.canonical_name }} · Detailed client report · Report {{ report.report_id }}</footer>
 </main><script>document.querySelector(".print")?.addEventListener("click",()=>window.print());</script></body></html>

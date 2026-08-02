@@ -4,11 +4,13 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 
 from ai_visibility.config.settings import Settings
+from aivc.config.settings import AivcSettings
 from aivc.contracts.models import (
     AnalysisPeriod,
     BundleStatus,
@@ -24,6 +26,7 @@ from aivc.database.recon_reporting import (
 from aivc.reporting.artifacts import refresh_latest_artifacts, write_final_report_artifacts
 from aivc.reporting.client_presentation import build_client_presentation
 from aivc.reporting.config import ReportAudience, ReportProfile, load_report_config
+from aivc.reporting.context import build_report_input
 from aivc.reporting.models import (
     ClientPresentation,
     FinalReportSnapshot,
@@ -33,6 +36,12 @@ from aivc.reporting.models import (
     ReportConfigMetadata,
     SovCompanyPosition,
     TopicPerformance,
+)
+from aivc.reporting.narrative import (
+    ClientNarrativeDraft,
+    StructuredLlmNarrative,
+    _validate_client_language,
+    client_report_prompt_sha256,
 )
 from aivc.reporting.quality import assess_publication
 from aivc.reporting.renderers import render_html, render_json, render_markdown
@@ -133,9 +142,7 @@ def _recon_reporting_payload() -> dict[str, object]:
                 "summary": "Do not publish this.",
             },
         ],
-        "run_history": [
-            {"run_id": "run-1", "status": "completed", "triggers_fired": 1}
-        ],
+        "run_history": [{"run_id": "run-1", "status": "completed", "triggers_fired": 1}],
     }
 
 
@@ -189,8 +196,7 @@ def test_config_profile_override_and_detailed_is_broader(
     assert explicit.profile is ReportProfile.decision
     detailed = load_report_config(profile=ReportProfile.detailed)
     assert (
-        detailed.profile_settings.max_decision_cards
-        >= explicit.profile_settings.max_decision_cards
+        detailed.profile_settings.max_decision_cards >= explicit.profile_settings.max_decision_cards
     )
     internal = load_report_config(
         profile=ReportProfile.detailed,
@@ -243,9 +249,7 @@ def test_recon_repository_sets_read_only_and_uses_exact_parameters(
         def cursor(self) -> FakeCursor:
             return FakeCursor()
 
-    monkeypatch.setattr(
-        "aivc.database.recon_reporting.connect", lambda _settings: FakeConnection()
-    )
+    monkeypatch.setattr("aivc.database.recon_reporting.connect", lambda _settings: FakeConnection())
     report_week = datetime(2026, 7, 27, tzinfo=UTC).date()
     result = load_recon_reporting_payload(
         Settings(_env_file=None),
@@ -277,9 +281,7 @@ def test_recon_payload_is_retained_while_views_apply_quality_gates() -> None:
 
     signals, recommendations, runs = _recon_views(recon, detailed)
     assert [signal.signal_id for signal in signals] == ["watch"]
-    assert [item.recommendation_id for item in recommendations] == [
-        "recommendation-watch"
-    ]
+    assert [item.recommendation_id for item in recommendations] == ["recommendation-watch"]
     assert [run.run_id for run in runs] == ["run-1"]
 
 
@@ -329,21 +331,154 @@ def test_audience_changes_presentation_without_changing_profile() -> None:
 
 def test_artifacts_are_atomic_manifested_and_validated(tmp_path: Path) -> None:
     snapshot = _snapshot()
-    manifest, paths = write_final_report_artifacts(
-        tmp_path, snapshot, write_latest_copies=False
-    )
+    manifest, paths = write_final_report_artifacts(tmp_path, snapshot, write_latest_copies=False)
     assert {item.artifact_type for item in manifest.artifacts} == {
         "json",
         "markdown",
         "html",
+        "report_content",
     }
     assert not list(tmp_path.rglob("*.tmp"))
     validated = validate_final_report_file(paths["json"])
     assert validated.checksum == snapshot.checksum
     latest = refresh_latest_artifacts(tmp_path, snapshot)
-    assert set(latest) == {"json", "md", "html"}
-    assert snapshot.config.report_audience.value in paths["html"].parts
-    assert snapshot.config.report_audience.value in latest["html"].parts
+    assert set(latest) == {"json", "md", "html", "report_content"}
+    assert paths["html"].parent == tmp_path / "aprio-script-alert-1-script" / "runs" / str(
+        PARENT_ID
+    )
+    assert latest["html"].parent == tmp_path / "aprio-script-alert-1-script"
+
+
+def test_compact_inputs_are_sealed_and_written_separately(tmp_path: Path) -> None:
+    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    report_input = build_report_input(
+        snapshot,
+        prompt_sha256=client_report_prompt_sha256(),
+    )
+    report_input.verify_checksum()
+    manifest, paths = write_final_report_artifacts(
+        tmp_path,
+        snapshot,
+        report_input=report_input,
+    )
+
+    assert {item.artifact_type for item in manifest.artifacts} == {
+        "json",
+        "markdown",
+        "html",
+        "report_content",
+        "citation_input",
+        "recon_input",
+        "report_input",
+    }
+    assert (
+        json.loads(paths["citation_input"].read_text(encoding="utf-8"))["source_bundle_id"]
+        == "citation"
+    )
+    assert (
+        json.loads(paths["recon_input"].read_text(encoding="utf-8"))["source_bundle_id"] == "recon"
+    )
+    assert (
+        json.loads(paths["report_input"].read_text(encoding="utf-8"))["checksum"]
+        == report_input.checksum
+    )
+
+
+def test_structured_llm_changes_prose_without_changing_measured_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    report_input = build_report_input(
+        snapshot,
+        prompt_sha256=client_report_prompt_sha256(),
+    )
+    draft = {
+        "executive_narrative": "Aprio has a measured opportunity to strengthen visibility.",
+        "main_implication_title": "Strengthen the measured position",
+        "main_implication": "Prioritize opportunities supported by both evidence streams.",
+        "topic_narratives": [],
+        "priority_narratives": [],
+        "leadership_decisions": ["Assign an accountable owner to the priority response."],
+        "strategic_conclusion": "Judge progress against the next validated measurement cycle.",
+    }
+
+    class FakeCompletions:
+        @staticmethod
+        def create(**_kwargs: object) -> object:
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(draft)))]
+            )
+
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions()))
+    monkeypatch.setattr("aivc.reporting.narrative.openai.OpenAI", lambda **_kwargs: fake_client)
+    monkeypatch.setattr(
+        "aivc.reporting.narrative.get_config",
+        lambda: SimpleNamespace(
+            openrouter_api_key="test-key",
+            gemini_model="test-model",
+            llm_timeout_seconds=10,
+            llm_max_retries=0,
+        ),
+    )
+    result = StructuredLlmNarrative(
+        AivcSettings(_env_file=None, aivc_report_llm_required=True)
+    ).enrich(snapshot, report_input)
+
+    assert result.client_presentation is not None
+    assert result.client_presentation.executive_narrative == draft["executive_narrative"]
+    assert snapshot.client_presentation is not None
+    assert (
+        result.client_presentation.headline_metrics == snapshot.client_presentation.headline_metrics
+    )
+    result.verify_checksum()
+
+
+def test_structured_llm_falls_back_to_validated_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    report_input = build_report_input(
+        snapshot,
+        prompt_sha256=client_report_prompt_sha256(),
+    )
+    monkeypatch.setattr(
+        "aivc.reporting.narrative.get_config",
+        lambda: SimpleNamespace(openrouter_api_key=""),
+    )
+    result = StructuredLlmNarrative(
+        AivcSettings(_env_file=None, aivc_report_llm_required=False)
+    ).enrich(snapshot, report_input)
+
+    assert result.client_presentation == snapshot.client_presentation
+    assert "report_narrative_fallback" in result.data_quality_flags
+    result.verify_checksum()
+
+
+@pytest.mark.parametrize(
+    "conclusion",
+    [
+        "The movement proves that the recommendation worked.",
+        "Visibility is 0.047619047619047616 in the monitored evidence.",
+        "Aprio appeared fifty-five times out of eight hundred total queries.",
+    ],
+)
+def test_client_language_rejects_causal_absolutes_and_raw_decimals(
+    conclusion: str,
+) -> None:
+    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    report_input = build_report_input(
+        snapshot,
+        prompt_sha256=client_report_prompt_sha256(),
+    )
+    draft = ClientNarrativeDraft(
+        executive_narrative="Measured evidence is available.",
+        main_implication_title="Review the measured position",
+        main_implication="Use the validated findings to prioritize action.",
+        strategic_conclusion=conclusion,
+    )
+
+    with pytest.raises(ValueError):
+        _validate_client_language(draft, report_input)
 
 
 def test_schema_10_snapshot_remains_readable_for_historical_upgrade() -> None:
@@ -361,9 +496,7 @@ def test_schema_10_snapshot_remains_readable_for_historical_upgrade() -> None:
         payload.pop(field)
     payload["config"].pop("report_audience")
     canonical = {
-        key: value
-        for key, value in payload.items()
-        if key not in {"checksum", "generated_at"}
+        key: value for key, value in payload.items() if key not in {"checksum", "generated_at"}
     }
     payload["checksum"] = hashlib.sha256(
         json.dumps(
@@ -407,9 +540,7 @@ def test_client_presentation_summarizes_instead_of_dumping_market_table() -> Non
         leader_sov=15.0,
         gap_to_leader=7.5,
         positions=[
-            SovCompanyPosition(
-                company_name="Competitor 1", sov=15.0, rank=1, is_tracked=True
-            ),
+            SovCompanyPosition(company_name="Competitor 1", sov=15.0, rank=1, is_tracked=True),
             SovCompanyPosition(
                 company_name="Aprio", sov=7.5, rank=3, is_client=True, is_tracked=True
             ),
@@ -445,9 +576,7 @@ def test_client_presentation_summarizes_instead_of_dumping_market_table() -> Non
         "Competitor 1",
         "Aprio",
     ]
-    assert presentation.priorities[0].actions == [
-        "Publish authoritative tax-advisory proof."
-    ]
+    assert presentation.priorities[0].actions == ["Publish authoritative tax-advisory proof."]
 
 
 def test_recon_recommendation_requires_a_publishable_recon_signal() -> None:
@@ -464,21 +593,27 @@ def test_recon_recommendation_requires_a_publishable_recon_signal() -> None:
         ).sealed()
 
     citation = bundle("ai_visibility", "citation")
-    recon = bundle("scout", "recon").model_copy(
-        update={
-            "recommendations": [
-                {
-                    "cluster_id": "noise-cluster",
-                    "competitor_name": "BDO",
-                    "validation_status": "ok",
-                    "action_bullets": ["Do not publish this noise-derived action."],
-                }
-            ]
-        }
-    ).sealed()
-    combined = bundle("aivc_combined", "combined").model_copy(
-        update={"source_bundle_ids": [citation.bundle_id, recon.bundle_id]}
-    ).sealed()
+    recon = (
+        bundle("scout", "recon")
+        .model_copy(
+            update={
+                "recommendations": [
+                    {
+                        "cluster_id": "noise-cluster",
+                        "competitor_name": "BDO",
+                        "validation_status": "ok",
+                        "action_bullets": ["Do not publish this noise-derived action."],
+                    }
+                ]
+            }
+        )
+        .sealed()
+    )
+    combined = (
+        bundle("aivc_combined", "combined")
+        .model_copy(update={"source_bundle_ids": [citation.bundle_id, recon.bundle_id]})
+        .sealed()
+    )
     publication = assess_publication(citation, recon, combined)
     assert publication.recon_signals == ()
     assert publication.recommendations == ()

@@ -286,7 +286,16 @@ class EvidenceIndexItem(StrictReportModel):
 
 
 class ArtifactRecord(StrictReportModel):
-    artifact_type: Literal["json", "markdown", "html", "manifest"]
+    artifact_type: Literal[
+        "json",
+        "markdown",
+        "html",
+        "manifest",
+        "citation_input",
+        "recon_input",
+        "report_input",
+        "report_content",
+    ]
     path: str
     byte_size: int = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")

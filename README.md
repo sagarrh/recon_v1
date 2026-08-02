@@ -101,7 +101,7 @@ uv run aivc db check
 uv run aivc db audit
 uv run aivc citations generate --company "Aprio"
 uv run aivc run --company "Aprio"
-uv run aivc report generate --company "Aprio" --profile decision --audience client
+uv run aivc report generate --company "Aprio" --allow-partial
 ```
 
 `aivc citations generate` runs independently and writes the established
@@ -116,24 +116,22 @@ output/aprio/recon-signal-bundle.json
 output/aprio/combined-signal-bundle.json
 ```
 
-The combined bundle remains the producer-level audit artifact. During final
-reporting, the application also executes the packaged, parameterized equivalent
-of `recon_query_for_report.sql` in a PostgreSQL read-only transaction. Its full
-seven-part payload (`client`, `clusters`, `sov`, `signals`, executive summary,
-recommendations, and run history) is preserved under `recon_reporting` in the
-JSON snapshot.
+The database remains the complete audit ledger. During final reporting, the
+application executes the packaged, parameterized equivalent of
+`recon_query_for_report.sql` in a PostgreSQL read-only transaction, reduces its
+result and the Citation evidence into two compact, schema-validated inputs, and
+writes the exact prompt envelope used for narrative generation.
 
 By default, `aivc report generate` resolves the newest complete persisted parent
 for the company and does not rerun either producer. Add `--refresh-data` only
 when a new Citation + Recon execution is deliberately required.
 
-Analysis depth and report audience are independent. `--profile
-decision|detailed` controls how much validated evidence is selected. `--audience
-client|internal` controls how it is communicated. Client output follows an
-executive presentation structure; internal output retains full SOV tables,
-queries, run history, methodology, and evidence appendices. Both retain the
-complete Recon query payload in structured JSON and apply the same quality
-gate. NOISE data remains auditable but is never presented as a finding.
+There is one final-report product: a detailed client-facing report. The LLM
+writes only validated narrative fields from the compact evidence envelope;
+exact metrics, actions, HTML structure, escaping, and persistence remain
+deterministic. If narrative generation is unavailable, the report uses the
+validated deterministic fallback and discloses that limitation. NOISE data
+remains in the database ledger but is never presented as a finding.
 The existing citation and Recon reports remain independently usable.
 The legacy Recon LLM citation analyzer is off by default and can be
 enabled only with `AIVC_RECON_LEGACY_AI_ANALYSIS_ENABLED=true`.

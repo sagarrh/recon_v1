@@ -212,57 +212,51 @@ output/aprio/combined-signal-bundle.json
 The combined bundle is the full structured audit source. For the unified,
 client-facing report, use the next section.
 
-## 9. Generate audience-specific reports from persisted evidence
+## 9. Generate the detailed client report
 
-Evidence collection and report presentation are separate. First run the
-producers when fresh evidence is required:
+For a fresh reporting cycle, use `--refresh-data`. The ordering is enforced:
+AI Citations runs, Recon runs and persists its client data, and only then does
+the report stage execute the read-only Recon reporting SQL.
 
 ```powershell
-uv run aivc run --company "Aprio"
+uv run aivc report generate --company "Aprio" --refresh-data --allow-partial
 ```
 
-Then generate any report combination from that persisted parent without
-rerunning Citation, Recon, page fetching, or LLM investigation:
+To regenerate presentation from an already completed Citation + Recon parent,
+omit `--refresh-data`:
 
 ```powershell
-uv run aivc report generate --company "Aprio" --profile decision --audience client
-uv run aivc report generate --company "Aprio" --profile detailed --audience client
-uv run aivc report generate --company "Aprio" --profile decision --audience internal
-uv run aivc report generate --company "Aprio" --profile detailed --audience internal
+uv run aivc report generate --company "Aprio" --allow-partial
 ```
 
 For exact reproducibility, prefer `--parent-run-id`. For exact client selection,
 prefer `--client-id`; a duplicated company name fails rather than guessing.
 
-`decision` and `detailed` are analysis-depth profiles. They do not represent
-audiences. `client` and `internal` are presentation audiences. A detailed client
-report therefore uses deeper evidence while still showing executive narrative,
-limited tracked-company context, implications, competitive priorities, an
-action roadmap, leadership decisions, and a strategic conclusion. A detailed
-internal report exposes the granular analyst tables and audit material.
-
-Only this explicit command performs a fresh producer run:
-
-```powershell
-uv run aivc report generate --company "Aprio" --profile detailed --audience client --refresh-data
-```
+The public CLI now produces one product: a detailed client-facing report. The
+former decision/internal combinations are no longer CLI options.
 
 Final-report generation runs a packaged, parameterized version of
 `recon_query_for_report.sql` using the exact client UUID, reporting week, and
 configured history window. That query is executed after `SET TRANSACTION READ
-ONLY`; it fetches data and cannot modify the database. The complete result is
-stored as `recon_reporting` in the structured JSON snapshot. HTML and Markdown
-render useful sections from that payload rather than dumping the raw object.
-NOISE-classified rows remain in the structured payload for audit but are not
-shown as client findings.
+ONLY`; it fetches data and cannot modify the database. The complete source
+records remain in the database ledger. Only compact, report-ready Citation and
+Recon inputs are supplied to the narrative model. NOISE-classified rows remain
+auditable in the ledger but are not shown as client findings.
 
-The default profile is controlled by `config/reporting.toml`, or by:
+Narrative generation uses the configured Recon/OpenRouter credentials. These
+optional controls are available:
 
 ```dotenv
-AIVC_REPORT_PROFILE=decision
-AIVC_REPORT_AUDIENCE=client
 AIVC_REPORT_CONFIG_PATH=
+AIVC_REPORT_LLM_MODEL=google/gemini-2.5-flash-lite
+AIVC_REPORT_LLM_MAX_TOKENS=12000
+AIVC_REPORT_LLM_REQUIRED=false
 ```
+
+The default uses Recon's existing lightweight summarization model. An empty
+model value reuses Recon's configured synthesis model. With
+`AIVC_REPORT_LLM_REQUIRED=false`, an unavailable LLM produces a disclosed,
+deterministic narrative fallback instead of losing the report.
 
 Partial reports are truthful but have disclosed evidence limitations. They are
 kept run-scoped and persisted; latest convenience copies are refreshed only
@@ -271,16 +265,17 @@ when the report is complete, or when `--allow-partial` is explicitly supplied.
 Expected additional files:
 
 ```text
-output/aprio/client/final-report.json
-output/aprio/client/final-report.md
-output/aprio/client/final-report.html
-output/aprio/internal/final-report.json
-output/aprio/internal/final-report.md
-output/aprio/internal/final-report.html
-output/aprio/runs/<parent-run-id>/<profile>/<audience>/artifact-manifest.json
-output/aprio/runs/<parent-run-id>/<profile>/<audience>/final-report.json
-output/aprio/runs/<parent-run-id>/<profile>/<audience>/final-report.md
-output/aprio/runs/<parent-run-id>/<profile>/<audience>/final-report.html
+output/aprio/final-report.json
+output/aprio/final-report.md
+output/aprio/final-report.html
+output/aprio/final-report-content.json
+output/aprio/inputs/ai-citation-report-input.json
+output/aprio/inputs/recon-report-input.json
+output/aprio/inputs/report-input-snapshot.json
+output/aprio/runs/<parent-run-id>/artifact-manifest.json
+output/aprio/runs/<parent-run-id>/final-report.json
+output/aprio/runs/<parent-run-id>/final-report.md
+output/aprio/runs/<parent-run-id>/final-report.html
 ```
 
 Inspect, validate, or rerender an exact historical parent without rerunning
@@ -288,16 +283,14 @@ either producer:
 
 ```powershell
 uv run aivc report show --parent-run-id "PARENT-UUID"
-uv run aivc report validate --path "output/aprio/client/final-report.json"
-uv run aivc report render --parent-run-id "PARENT-UUID" --profile detailed --audience client --allow-partial
+uv run aivc report validate --path "output/aprio/final-report.json"
+uv run aivc report render --parent-run-id "PARENT-UUID" --allow-partial
 ```
 
 Historical rendering always reads the Citation and producer bundles attached to
-that parent run. If the parent already has a schema 1.2 report snapshot, it also
-reuses that snapshot's exact full Recon reporting payload. For an older parent
-that predates schema 1.2, the renderer performs one read-only reconstruction
-bounded to the parent's reporting week, then persists it for deterministic
-future rerenders.
+that parent run and executes a read-only Recon reconstruction bounded to that
+parent's reporting week. It never reruns Recon unless `--refresh-data` is
+explicitly supplied.
 
 ## 10. Database safety
 

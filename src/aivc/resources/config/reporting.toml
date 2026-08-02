@@ -1,11 +1,11 @@
-config_version = "1.1"
+config_version = "1.2"
 
 [report]
-default_profile = "decision"
+default_profile = "detailed"
 default_audience = "client"
 write_latest_copies = true
 allow_partial = false
-narrative_mode = "reuse_validated"
+narrative_mode = "structured_llm"
 
 [profiles.decision]
 max_decision_cards = 5

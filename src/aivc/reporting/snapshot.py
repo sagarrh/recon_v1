@@ -550,7 +550,9 @@ def build_final_report_snapshot(
         recon_recommendations=recon_recommendations,
         recon_run_history=recon_runs,
         excluded_topics=excluded_topics,
-        recon_reporting=recon_report,
+        # The full Recon SQL result remains in the database ledger. Final reports retain
+        # only the compact, validated views required for publication.
+        recon_reporting=None,
         client_presentation=build_client_presentation(
             client_name=client.canonical_name,
             topics=topics,

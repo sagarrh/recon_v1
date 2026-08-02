@@ -9,7 +9,6 @@ from ai_visibility.config.settings import Settings
 from ai_visibility.database.migrations import apply_migrations
 from aivc.config.settings import AivcSettings
 from aivc.database.final_reports import (
-    load_final_report_by_parent,
     load_signal_bundles_for_parent,
     mark_final_report_failed,
     persist_final_report,
@@ -21,8 +20,13 @@ from aivc.reporting.artifacts import (
     write_final_report_artifacts,
 )
 from aivc.reporting.config import ReportAudience, ReportProfile, load_report_config
+from aivc.reporting.context import ReportInputSnapshot, build_report_input
 from aivc.reporting.models import ArtifactManifest, FinalReportSnapshot
-from aivc.reporting.narrative import ReuseValidatedNarrative
+from aivc.reporting.narrative import (
+    ReuseValidatedNarrative,
+    StructuredLlmNarrative,
+    client_report_prompt_sha256,
+)
 from aivc.reporting.snapshot import build_final_report_snapshot
 from aivc.reporting.validation import validate_final_report_payload
 from scout.config import get_config
@@ -33,6 +37,7 @@ from .pipeline import run_integrated_pipeline
 @dataclass(frozen=True)
 class FinalReportRunResult:
     snapshot: FinalReportSnapshot
+    report_input: ReportInputSnapshot
     manifest: ArtifactManifest
     database_report_id: UUID
     artifact_paths: dict[str, Path]
@@ -54,6 +59,7 @@ def _citation_report_from_bundle(bundle_path: str | None) -> dict[str, object]:
 def _write_persist_and_refresh(
     settings: Settings,
     snapshot: FinalReportSnapshot,
+    report_input: ReportInputSnapshot,
     *,
     write_latest: bool,
 ) -> FinalReportRunResult:
@@ -61,12 +67,17 @@ def _write_persist_and_refresh(
     manifest, artifact_paths = write_final_report_artifacts(
         settings.report_output_dir,
         snapshot,
+        report_input=report_input,
         write_latest_copies=False,
     )
     database_report_id = persist_final_report(settings, snapshot, manifest)
     try:
         latest_paths = (
-            refresh_latest_artifacts(settings.report_output_dir, snapshot)
+            refresh_latest_artifacts(
+                settings.report_output_dir,
+                snapshot,
+                report_input,
+            )
             if write_latest
             else {}
         )
@@ -79,6 +90,7 @@ def _write_persist_and_refresh(
         raise
     return FinalReportRunResult(
         snapshot=snapshot,
+        report_input=report_input,
         manifest=manifest,
         database_report_id=database_report_id,
         artifact_paths=artifact_paths,
@@ -92,21 +104,17 @@ def run_final_report_pipeline(
     *,
     company_name: str | None = None,
     client_id: UUID | None = None,
-    profile: ReportProfile | str | None = None,
-    audience: ReportAudience | str | None = None,
     config_path: Path | None = None,
     allow_partial: bool | None = None,
 ) -> FinalReportRunResult:
     shared_settings.require_supabase_key()
     recon_config = get_config()
     if not recon_config.openrouter_api_key.strip():
-        raise RuntimeError(
-            "OPENROUTER_API_KEY is required for the Recon synthesis stages."
-        )
+        raise RuntimeError("OPENROUTER_API_KEY is required for the Recon synthesis stages.")
     config = load_report_config(
         config_path=config_path,
-        profile=profile,
-        audience=audience,
+        profile=ReportProfile.detailed,
+        audience=ReportAudience.client,
     )
     integrated = run_integrated_pipeline(
         settings,
@@ -129,7 +137,7 @@ def run_final_report_pipeline(
         set_stage(settings, parent_run_id, current_stage, "running")
         set_stage(settings, parent_run_id, current_stage, "completed")
 
-        current_stage = "decision_cards"
+        current_stage = "report_context"
         set_stage(settings, parent_run_id, current_stage, "running")
         report_week = (
             integrated.combined_bundle.analysis_period.end.date()
@@ -151,7 +159,16 @@ def run_final_report_pipeline(
             recon_reporting=recon_reporting,
             config=config,
         )
-        snapshot = ReuseValidatedNarrative().enrich(snapshot)
+        report_input = build_report_input(
+            snapshot,
+            prompt_sha256=client_report_prompt_sha256(),
+        )
+        narrative = (
+            StructuredLlmNarrative(shared_settings)
+            if config.config.report.narrative_mode == "structured_llm"
+            else ReuseValidatedNarrative()
+        )
+        snapshot = narrative.enrich(snapshot, report_input)
         set_stage(
             settings,
             parent_run_id,
@@ -177,6 +194,7 @@ def run_final_report_pipeline(
         manifest, artifact_paths = write_final_report_artifacts(
             settings.report_output_dir,
             snapshot,
+            report_input=report_input,
             write_latest_copies=False,
         )
         set_stage(settings, parent_run_id, current_stage, "completed")
@@ -185,16 +203,18 @@ def run_final_report_pipeline(
         set_stage(settings, parent_run_id, current_stage, "running")
         database_report_id = persist_final_report(settings, snapshot, manifest)
         partial_allowed = (
-            allow_partial
-            if allow_partial is not None
-            else config.config.report.allow_partial
+            allow_partial if allow_partial is not None else config.config.report.allow_partial
         )
         publishable = snapshot.status.value == "complete" or (
             snapshot.status.value == "partial" and partial_allowed
         )
         try:
             latest_paths = (
-                refresh_latest_artifacts(settings.report_output_dir, snapshot)
+                refresh_latest_artifacts(
+                    settings.report_output_dir,
+                    snapshot,
+                    report_input,
+                )
                 if config.config.report.write_latest_copies and publishable
                 else {}
             )
@@ -224,6 +244,7 @@ def run_final_report_pipeline(
         )
         return FinalReportRunResult(
             snapshot=snapshot,
+            report_input=report_input,
             manifest=manifest,
             database_report_id=database_report_id,
             artifact_paths=artifact_paths,
@@ -239,8 +260,6 @@ def render_historical_report(
     settings: Settings,
     *,
     parent_run_id: UUID,
-    profile: ReportProfile | str | None = None,
-    audience: ReportAudience | str | None = None,
     config_path: Path | None = None,
     allow_partial: bool | None = None,
 ) -> FinalReportRunResult:
@@ -248,8 +267,8 @@ def render_historical_report(
     apply_migrations(settings)
     config = load_report_config(
         config_path=config_path,
-        profile=profile,
-        audience=audience,
+        profile=ReportProfile.detailed,
+        audience=ReportAudience.client,
     )
     partial_allowed = (
         allow_partial if allow_partial is not None else config.config.report.allow_partial
@@ -265,30 +284,17 @@ def render_historical_report(
         None,
     )
     citation_report = _citation_report_from_bundle(reference.json_path if reference else None)
-    previous_snapshot = load_final_report_by_parent(
-        settings,
-        parent_run_id,
-        profile=config.profile.value,
+    report_week = (
+        bundles["aivc_combined"].analysis_period.end.date()
+        if bundles["aivc_combined"].analysis_period.end
+        else None
     )
-    if (
-        previous_snapshot is not None
-        and previous_snapshot.recon_reporting is not None
-        and previous_snapshot.config.effective_profile.history_weeks
-        >= config.profile_settings.history_weeks
-    ):
-        recon_reporting = previous_snapshot.recon_reporting.model_dump(mode="json")
-    else:
-        report_week = (
-            bundles["aivc_combined"].analysis_period.end.date()
-            if bundles["aivc_combined"].analysis_period.end
-            else None
-        )
-        recon_reporting = load_recon_reporting_payload(
-            settings,
-            client_id=bundles["aivc_combined"].client.client_id,
-            report_week=report_week,
-            history_weeks=config.profile_settings.history_weeks,
-        )
+    recon_reporting = load_recon_reporting_payload(
+        settings,
+        client_id=bundles["aivc_combined"].client.client_id,
+        report_week=report_week,
+        history_weeks=config.profile_settings.history_weeks,
+    )
     snapshot = build_final_report_snapshot(
         parent_run_id=parent_run_id,
         citation_report=citation_report,
@@ -298,12 +304,23 @@ def render_historical_report(
         recon_reporting=recon_reporting,
         config=config,
     )
-    snapshot = ReuseValidatedNarrative().enrich(snapshot)
+    report_input = build_report_input(
+        snapshot,
+        prompt_sha256=client_report_prompt_sha256(),
+    )
+    shared_settings = AivcSettings()
+    narrative = (
+        StructuredLlmNarrative(shared_settings)
+        if config.config.report.narrative_mode == "structured_llm"
+        else ReuseValidatedNarrative()
+    )
+    snapshot = narrative.enrich(snapshot, report_input)
     publishable = snapshot.status.value == "complete" or (
         snapshot.status.value == "partial" and partial_allowed
     )
     return _write_persist_and_refresh(
         settings,
         snapshot,
+        report_input,
         write_latest=config.config.report.write_latest_copies and publishable,
     )

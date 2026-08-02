@@ -40,11 +40,11 @@ class ProfileSettings(StrictConfigModel):
 
 
 class ReportDefaults(StrictConfigModel):
-    default_profile: ReportProfile = ReportProfile.decision
+    default_profile: ReportProfile = ReportProfile.detailed
     default_audience: ReportAudience = ReportAudience.client
     write_latest_copies: bool = True
     allow_partial: bool = False
-    narrative_mode: Literal["reuse_validated"] = "reuse_validated"
+    narrative_mode: Literal["reuse_validated", "structured_llm"] = "structured_llm"
 
 
 class ProfileCollection(StrictConfigModel):
@@ -53,7 +53,7 @@ class ProfileCollection(StrictConfigModel):
 
 
 class ReportingConfig(StrictConfigModel):
-    config_version: Literal["1.0", "1.1"] = "1.1"
+    config_version: Literal["1.0", "1.1", "1.2"] = "1.2"
     report: ReportDefaults
     profiles: ProfileCollection
 

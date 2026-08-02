@@ -22,7 +22,6 @@ from aivc.orchestration import (
     run_integrated_pipeline,
 )
 from aivc.producers import generate_citation_bundle
-from aivc.reporting.config import ReportAudience, ReportProfile
 from aivc.reporting.validation import validate_final_report_file
 
 app = typer.Typer(
@@ -32,7 +31,7 @@ app = typer.Typer(
 )
 db_app = typer.Typer(help="Validate shared database configuration.")
 citations_app = typer.Typer(help="Run the AI citation producer independently.")
-report_app = typer.Typer(help="Generate and inspect audience-specific unified reports.")
+report_app = typer.Typer(help="Generate and inspect the detailed client report.")
 app.add_typer(db_app, name="db")
 app.add_typer(citations_app, name="citations")
 app.add_typer(report_app, name="report")
@@ -72,9 +71,7 @@ def citations_generate(
     company: Annotated[str, typer.Option("--company", help="Exact client company name.")],
 ) -> None:
     """Run the existing citation report through the shared CLI."""
-    result, bundle_path, bundle = _run(
-        lambda: generate_citation_bundle(get_settings(), company)
-    )
+    result, bundle_path, bundle = _run(lambda: generate_citation_bundle(get_settings(), company))
     _print(
         {
             "report_status": "complete",
@@ -131,8 +128,7 @@ def _report_result(result: Any) -> dict[str, Any]:
         "parent_run_id": snapshot.parent_run_id,
         "report_id": snapshot.report_id,
         "database_report_id": result.database_report_id,
-        "profile": snapshot.config.report_profile,
-        "audience": snapshot.config.report_audience,
+        "report_type": "detailed_client",
         "config_hash": snapshot.config.report_config_hash,
         "snapshot_checksum": snapshot.checksum,
         "source_bundle_ids": snapshot.source_bundle_ids,
@@ -168,16 +164,9 @@ def report_generate(
     client_id: Annotated[
         UUID | None, typer.Option("--client-id", help="Exact authoritative client UUID.")
     ] = None,
-    profile: Annotated[
-        ReportProfile | None,
-        typer.Option("--profile", help="Report detail profile."),
-    ] = None,
-    audience: Annotated[
-        ReportAudience | None,
-        typer.Option("--audience", help="Client or internal presentation."),
-    ] = None,
     config: Annotated[
-        Path | None, typer.Option("--config", help="Reporting TOML configuration path."),
+        Path | None,
+        typer.Option("--config", help="Reporting TOML configuration path."),
     ] = None,
     allow_partial: Annotated[
         bool | None,
@@ -205,8 +194,6 @@ def report_generate(
                 get_aivc_settings(),
                 company_name=company,
                 client_id=client_id,
-                profile=profile,
-                audience=audience,
                 config_path=config,
                 allow_partial=allow_partial,
             )
@@ -233,8 +220,6 @@ def report_generate(
             lambda: render_historical_report(
                 get_settings(),
                 parent_run_id=parent_run_id,
-                profile=profile,
-                audience=audience,
                 config_path=config,
                 allow_partial=allow_partial,
             )
@@ -245,10 +230,6 @@ def report_generate(
 @report_app.command("render")
 def report_render(
     parent_run_id: Annotated[UUID, typer.Option("--parent-run-id")],
-    profile: Annotated[ReportProfile, typer.Option("--profile")] = ReportProfile.decision,
-    audience: Annotated[
-        ReportAudience, typer.Option("--audience")
-    ] = ReportAudience.client,
     config: Annotated[Path | None, typer.Option("--config")] = None,
     allow_partial: Annotated[
         bool | None,
@@ -260,8 +241,6 @@ def report_render(
         lambda: render_historical_report(
             get_settings(),
             parent_run_id=parent_run_id,
-            profile=profile,
-            audience=audience,
             config_path=config,
             allow_partial=allow_partial,
         )
@@ -272,16 +251,14 @@ def report_render(
 @report_app.command("show")
 def report_show(
     parent_run_id: Annotated[UUID, typer.Option("--parent-run-id")],
-    profile: Annotated[ReportProfile | None, typer.Option("--profile")] = None,
-    audience: Annotated[ReportAudience | None, typer.Option("--audience")] = None,
 ) -> None:
     """Show concise metadata for a persisted final report."""
     snapshot = _run(
         lambda: load_final_report_by_parent(
             get_settings(),
             parent_run_id,
-            profile=profile.value if profile else None,
-            audience=audience.value if audience else None,
+            profile="detailed",
+            audience="client",
         )
     )
     if snapshot is None:
@@ -292,8 +269,7 @@ def report_show(
             "report_id": snapshot.report_id,
             "parent_run_id": snapshot.parent_run_id,
             "client": snapshot.client.model_dump(mode="json"),
-            "profile": snapshot.config.report_profile,
-            "audience": snapshot.config.report_audience,
+            "report_type": "detailed_client",
             "checksum": snapshot.checksum,
             "decision_card_count": len(snapshot.decision_cards),
             "action_count": len(snapshot.consolidated_actions),

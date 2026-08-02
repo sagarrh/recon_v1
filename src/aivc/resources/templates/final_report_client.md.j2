@@ -1,8 +1,6 @@
 # {{ report.client.canonical_name }} — AI Visibility & Competitive Intelligence Report
 
 **Status:** {{ report.status.value }}<br>
-**Analysis depth:** {{ report.config.report_profile.value }}<br>
-**Audience:** {{ report.config.report_audience.value }}<br>
 **Reporting period:** {{ report.analysis_period.start | date }} to {{ report.analysis_period.end | date }}
 
 {% set client = report.client_presentation %}
@@ -92,7 +90,7 @@ No material publishable competitive movement was detected.
 
 SOV is the weekly Recon share-of-voice measurement for a company and monitored topic. Literal visibility is the share of valid monitored answers that explicitly name the client. These metrics are deliberately kept separate.
 
-{% if report.limitations %}This report is {{ report.status.value }} and carries {{ report.limitations | length }} disclosed data-quality limitation(s). The internal report and structured JSON retain the detailed evidence and audit trail.{% endif %}
+{% if report.limitations %}This report is {{ report.status.value }} and carries {{ report.limitations | length }} disclosed data-quality limitation(s). The structured input snapshots and database ledger retain the supporting audit trail.{% endif %}
 
 ---
 
