@@ -23,11 +23,12 @@ The system resolves the client, loads all of its valid historical monitoring run
 - `schemas/` — public JSON Schema and API contracts.
 - `fixtures/` — canonical test evidence.
 - `tests/` — unit and Recon integration tests.
-- `output/` — ignored generated reports and database backups.
-- `docs/` — current guides, architecture, references, plans, and archived history.
+- `output/` — ignored generated reports, local reference material, and database backups.
+- `docs/guides/` — the maintained operator documentation committed with the project.
 
-Start with [`docs/README.md`](docs/README.md), then follow the
-[`Operations Guide`](docs/guides/OPERATIONS_GUIDE.md).
+Start with the [`Operations Guide`](docs/guides/OPERATIONS_GUIDE.md). Local
+design references and the reusable manual-report prompt live under
+`output/docs/` and are intentionally not committed.
 
 ## Non-negotiable product rules
 
@@ -118,7 +119,7 @@ when a new Citation + Recon execution is deliberately required.
 
 The application stops at `report-input-snapshot.json`; it does not call an
 additional final-report LLM or render final HTML/Markdown. Use the reusable
-prompt in `docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md` with Codex or Claude
+prompt in `output/docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md` with Codex or Claude
 Code. NOISE data remains in the database ledger but is excluded from the compact
 client-facing input.
 The existing citation and Recon reports remain independently usable.

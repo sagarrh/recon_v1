@@ -142,7 +142,7 @@ def _report_result(result: Any) -> dict[str, Any]:
             for record in result.manifest.artifacts
         },
         "latest_inputs_refreshed": bool(result.latest_paths),
-        "manual_report_prompt": "docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md",
+        "manual_report_prompt": "output/docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md",
     }
 
 

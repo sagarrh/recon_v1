@@ -117,8 +117,10 @@ The root migration runner applies checksummed, additive migrations for
 `ai_visibility_*` and `aivc_*` tables. It refuses SQL that mutates
 `public.ai_monitoring`.
 
-Historical Recon SQL under `docs/legacy/recon_sql/` is reference-only. Never
-apply that directory automatically.
+Local schema snapshots and the original manual Recon reporting query under
+`output/docs/reference/database/` are reference-only. Never apply those files
+automatically. Runtime migrations come only from the numbered root
+`migrations/` directory.
 
 ## 6. Generate a citation report
 
@@ -263,7 +265,7 @@ that parent run and executes a read-only Recon reconstruction bounded to that
 parent's reporting week. It never reruns Recon.
 
 Generate the final standalone HTML manually with
-`docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md`.
+`output/docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md`.
 
 ## 10. Database safety
 
@@ -276,9 +278,9 @@ Normal operation does write derived data to:
 - `ai_visibility_*` citation analysis/report tables;
 - existing Recon-owned tables such as `cycle_runs`, `investigations`,
   `recommendations`, and `reports`;
-- `aivc_*` parent-run, stage, bundle, and delivery tables.
+- `aivc_*` parent-run, stage, and source-bundle tables.
 
-## 10. Quality checks after code changes
+## 11. Quality checks after code changes
 
 ```powershell
 uv run ruff check .
@@ -287,10 +289,10 @@ uv run pytest -q
 uv build
 ```
 
-Expected current baseline: 70 passing tests and one intentionally skipped
+Expected current baseline: 80 passing tests and one intentionally skipped
 legacy experimental test.
 
-## 11. Common failures
+## 12. Common failures
 
 ### Hostname cannot be resolved
 
@@ -316,9 +318,10 @@ Inspect failed jobs, retry transient failures, and process again. Robots rules,
 private-network protection, size limits, or unsupported content may
 legitimately prevent a fetch.
 
-### Report is marked partial
+### Report input contains limitations
 
-Partial does not necessarily mean report generation failed. It means the
-report contains explicit limitations such as incomplete provider
-configuration, unavailable citation positions, metric mismatches, or missing
-historical page snapshots.
+Limitations do not necessarily mean input preparation failed. They disclose
+issues such as incomplete provider configuration, unavailable citation
+positions, metric mismatches, or missing historical page snapshots. The
+application preserves these warnings for the manual report author instead of
+hiding them behind a publication switch.
