@@ -1,25 +1,11 @@
-config_version = "1.2"
+config_version = "1.3"
 
 [report]
-default_profile = "detailed"
-default_audience = "client"
 write_latest_copies = true
 allow_partial = false
 narrative_mode = "structured_llm"
 
-[profiles.decision]
-max_decision_cards = 5
-max_recommendations = 5
-max_sources_per_card = 5
-max_provider_rows = 6
-max_query_rows = 10
-history_weeks = 8
-include_query_details = false
-include_full_sov_tables = false
-include_evidence_appendix = false
-include_data_quality_appendix = false
-
-[profiles.detailed]
+[limits]
 max_decision_cards = 20
 max_recommendations = 15
 max_sources_per_card = 20

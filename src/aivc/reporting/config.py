@@ -4,26 +4,15 @@ import hashlib
 import json
 import os
 import tomllib
-from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class StrictConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class ReportProfile(StrEnum):
-    decision = "decision"
-    detailed = "detailed"
-
-
-class ReportAudience(StrEnum):
-    client = "client"
-    internal = "internal"
 
 
 class ProfileSettings(StrictConfigModel):
@@ -40,44 +29,19 @@ class ProfileSettings(StrictConfigModel):
 
 
 class ReportDefaults(StrictConfigModel):
-    default_profile: ReportProfile = ReportProfile.detailed
-    default_audience: ReportAudience = ReportAudience.client
     write_latest_copies: bool = True
     allow_partial: bool = False
     narrative_mode: Literal["reuse_validated", "structured_llm"] = "structured_llm"
 
 
-class ProfileCollection(StrictConfigModel):
-    decision: ProfileSettings
-    detailed: ProfileSettings
-
-
 class ReportingConfig(StrictConfigModel):
-    config_version: Literal["1.0", "1.1", "1.2"] = "1.2"
+    config_version: Literal["1.3"] = "1.3"
     report: ReportDefaults
-    profiles: ProfileCollection
-
-    @model_validator(mode="after")
-    def detailed_must_not_be_narrower(self) -> ReportingConfig:
-        decision = self.profiles.decision
-        detailed = self.profiles.detailed
-        comparable = (
-            "max_decision_cards",
-            "max_recommendations",
-            "max_sources_per_card",
-            "max_provider_rows",
-            "max_query_rows",
-            "history_weeks",
-        )
-        if any(getattr(detailed, name) < getattr(decision, name) for name in comparable):
-            raise ValueError("detailed profile limits must not be lower than decision limits")
-        return self
+    limits: ProfileSettings
 
 
 class ResolvedReportConfig(StrictConfigModel):
     config: ReportingConfig
-    profile: ReportProfile
-    audience: ReportAudience
     profile_settings: ProfileSettings
     config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source: str
@@ -103,10 +67,8 @@ def _load_toml_bytes(content: bytes) -> ReportingConfig:
 def load_report_config(
     *,
     config_path: Path | None = None,
-    profile: ReportProfile | str | None = None,
-    audience: ReportAudience | str | None = None,
 ) -> ResolvedReportConfig:
-    """Load strict report configuration with CLI > env > TOML precedence."""
+    """Load the single detailed, client-facing report configuration."""
     explicit_env_path = os.getenv("AIVC_REPORT_CONFIG_PATH")
     selected_path = config_path or (Path(explicit_env_path) if explicit_env_path else None)
     if selected_path is not None:
@@ -124,18 +86,9 @@ def load_report_config(
             config = _load_toml_bytes(packaged.read_bytes())
             source = "packaged_default"
 
-    env_profile = os.getenv("AIVC_REPORT_PROFILE")
-    env_audience = os.getenv("AIVC_REPORT_AUDIENCE")
-    selected_profile = ReportProfile(profile or env_profile or config.report.default_profile)
-    selected_audience = ReportAudience(
-        audience or env_audience or config.report.default_audience
-    )
-    settings = getattr(config.profiles, selected_profile.value)
     return ResolvedReportConfig(
         config=config,
-        profile=selected_profile,
-        audience=selected_audience,
-        profile_settings=settings,
+        profile_settings=config.limits,
         config_hash=_canonical_hash(config),
         source=source,
     )

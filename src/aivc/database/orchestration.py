@@ -110,7 +110,6 @@ def persist_signal_bundle(settings: Settings, bundle: SignalBundle) -> None:
               schema_version, analysis_start, analysis_end, status, payload, checksum
             ) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             on conflict(bundle_id) do update set
-              parent_run_id = excluded.parent_run_id,
               status = excluded.status,
               payload = excluded.payload,
               checksum = excluded.checksum,
@@ -138,7 +137,6 @@ def finish_pipeline_run(
     parent_run_id: UUID,
     status: str,
     *,
-    combined_bundle: SignalBundle | None = None,
     error: Exception | None = None,
 ) -> None:
     with connect(settings) as connection, connection.cursor() as cursor:
@@ -148,16 +146,12 @@ def finish_pipeline_run(
               status = %s,
               completed_at = now(),
               error_summary = %s,
-              combined_bundle_id = %s,
-              combined_bundle_checksum = %s,
               updated_at = now()
             where id = %s
             """,
             (
                 status,
                 str(error)[:4000] if error else None,
-                combined_bundle.bundle_id if combined_bundle else None,
-                combined_bundle.checksum if combined_bundle else None,
                 parent_run_id,
             ),
         )

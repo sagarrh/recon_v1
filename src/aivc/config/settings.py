@@ -32,8 +32,6 @@ class AivcSettings(BaseSettings):
     aivc_delivery_mode: str = Field(default="configured", pattern="^(configured|disabled)$")
     aivc_stage_lease_seconds: int = Field(default=900, ge=30, le=86_400)
     aivc_bundle_output_dir: Path = Path("./output")
-    aivc_report_profile: str | None = Field(default=None, pattern="^(decision|detailed)$")
-    aivc_report_config_path: Path | None = None
     aivc_report_llm_model: str = "google/gemini-2.5-flash-lite"
     aivc_report_llm_max_tokens: int = Field(default=12_000, ge=1_000, le=50_000)
     aivc_report_llm_required: bool = False

@@ -32,14 +32,9 @@ def _date(value: date | datetime | str | None) -> str:
 
 def render_html(snapshot: FinalReportSnapshot) -> str:
     snapshot.verify_checksum()
-    template_name = (
-        "final_report_client.html.j2"
-        if snapshot.config.report_audience.value == "client"
-        else "final_report.html.j2"
-    )
     template_text = (
         files("aivc.resources")
-        .joinpath(f"templates/{template_name}")
+        .joinpath("templates/final_report_client.html.j2")
         .read_text(encoding="utf-8")
     )
     environment = Environment(

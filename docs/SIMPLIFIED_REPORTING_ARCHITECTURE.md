@@ -39,8 +39,6 @@ not rerun either producer.
 
 ## Database disposition
 
-No tables are deleted by this refactor.
-
 | Group | Current disposition | Reason |
 |---|---|---|
 | `public.ai_monitoring` | Keep, immutable | Authoritative Citation ledger |
@@ -48,12 +46,12 @@ No tables are deleted by this refactor.
 | `ai_visibility_*` normalization and page tables | Keep | Correct metrics, evidence provenance, and safe page intelligence |
 | `aivc_pipeline_runs`, `aivc_pipeline_stages` | Keep | Run ordering, failure recovery, and auditability |
 | `aivc_final_reports` | Keep | One durable final report snapshot and artifact manifest |
-| `aivc_signal_bundles` | Transitional, still required | Historical parent resolution currently depends on producer checksums |
-| `aivc_delivery_log` | Review when delivery requirements are finalized | Not required for local report rendering |
+| `aivc_signal_bundles` | Keep two source bundles per parent | Historical resolution depends on the Citation and Scout checksums; combined copies were removed |
+| `aivc_delivery_log` | Proposed drop | Empty and has no runtime code references |
 
-The combined signal bundle and legacy profile/audience code are candidates for
-later removal, but only after the simplified path has passed parity checks and
-historical report resolution no longer depends on them.
+The combined signal bundle and legacy profile/audience runtime branches have
+been removed. See `DATABASE_AND_CODE_CLEANUP_AUDIT.md` for the reviewed,
+explicitly gated database cleanup.
 
 ## LLM boundary
 

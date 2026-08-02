@@ -40,22 +40,25 @@ def _is_publishable_recon(signal: Signal) -> bool:
 def assess_publication(
     citation: SignalBundle,
     recon: SignalBundle,
-    combined: SignalBundle,
 ) -> PublicationResult:
-    """Verify bundle identity/checksums and retain only publishable evidence."""
+    """Verify the two source bundles and retain only publishable evidence."""
     blockers: list[str] = []
-    for bundle in (citation, recon, combined):
+    for bundle in (citation, recon):
         try:
             bundle.verify_checksum()
         except ValueError:
             blockers.append(f"invalid_bundle_checksum:{bundle.producer.name}")
-    client_ids = {citation.client.client_id, recon.client.client_id, combined.client.client_id}
+    client_ids = {citation.client.client_id, recon.client.client_id}
     if len(client_ids) != 1:
         blockers.append("client_identity_mismatch")
-    if set(combined.source_bundle_ids) != {citation.bundle_id, recon.bundle_id}:
-        blockers.append("combined_source_bundle_mismatch")
 
-    evidence = {item.evidence_id: item for item in combined.evidence}
+    evidence: dict[str, EvidenceArtifact] = {}
+    for artifact in [*citation.evidence, *recon.evidence]:
+        existing = evidence.get(artifact.evidence_id)
+        if existing is not None and existing != artifact:
+            blockers.append(f"conflicting_evidence:{artifact.evidence_id}")
+            continue
+        evidence[artifact.evidence_id] = artifact
     citation_signals = tuple(
         signal
         for signal in citation.signals
@@ -84,7 +87,7 @@ def assess_publication(
         )
         in publishable_recon_keys
     )
-    flags = sorted(set(combined.data_quality_flags))
+    flags = sorted(set(citation.data_quality_flags + recon.data_quality_flags))
     blockers.extend(
         flag for flag in flags if flag.startswith("recon_persistence_failed:")
     )

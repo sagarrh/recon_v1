@@ -39,7 +39,7 @@ class AnalysisPeriod(ContractModel):
 
 
 class ProducerIdentity(ContractModel):
-    name: Literal["ai_visibility", "scout", "aivc_combined"]
+    name: Literal["ai_visibility", "scout"]
     version: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
     parent_run_id: UUID | None = None
@@ -111,6 +111,7 @@ class SignalBundle(ContractModel):
     evidence: list[EvidenceArtifact] = Field(default_factory=list)
     reports: list[ReportReference] = Field(default_factory=list)
     data_quality_flags: list[str] = Field(default_factory=list)
+    # Kept only so pre-1.3 source bundles remain readable. New source bundles leave it empty.
     source_bundle_ids: list[str] = Field(default_factory=list)
     checksum: str | None = None
 

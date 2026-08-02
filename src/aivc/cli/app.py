@@ -108,13 +108,17 @@ def integrated_run(
     )
     _print(
         {
-            "status": result.combined_bundle.status,
+            "status": (
+                "complete"
+                if result.citation_bundle.status.value == "complete"
+                and result.recon_bundle.status.value == "complete"
+                else "partial"
+            ),
             "parent_run_id": result.parent_run_id,
             "citation_bundle_path": result.citation_bundle_path,
             "recon_bundle_path": result.recon_bundle_path,
-            "combined_bundle_path": result.combined_bundle_path,
-            "combined_bundle_id": result.combined_bundle.bundle_id,
-            "checksum": result.combined_bundle.checksum,
+            "citation_bundle_id": result.citation_bundle.bundle_id,
+            "recon_bundle_id": result.recon_bundle.bundle_id,
         }
     )
 
@@ -257,8 +261,6 @@ def report_show(
         lambda: load_final_report_by_parent(
             get_settings(),
             parent_run_id,
-            profile="detailed",
-            audience="client",
         )
     )
     if snapshot is None:

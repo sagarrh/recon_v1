@@ -9,7 +9,6 @@ from ai_visibility.companies.resolver import resolve_client, resolve_client_by_i
 from ai_visibility.config.settings import Settings
 from ai_visibility.database.migrations import apply_migrations
 from ai_visibility.pipeline import generate_company_report
-from aivc.bundles import compose_bundles
 from aivc.config.settings import AivcSettings
 from aivc.contracts.models import ClientIdentity, SignalBundle
 from aivc.database.orchestration import (
@@ -28,10 +27,8 @@ class IntegratedRunResult:
     parent_run_id: UUID
     citation_bundle_path: Path
     recon_bundle_path: Path
-    combined_bundle_path: Path
     citation_bundle: SignalBundle
     recon_bundle: SignalBundle
-    combined_bundle: SignalBundle
     citation_report: dict[str, object]
 
 
@@ -156,38 +153,20 @@ def run_integrated_pipeline(
             output_checksum=recon_bundle.checksum,
         )
 
-        set_stage(settings, parent_run_id, "compose", "running")
-        combined = compose_bundles(
-            citation_bundle,
-            recon_bundle,
-            producer_version=shared_settings.pipeline_version,
-            parent_run_id=parent_run_id,
+        final_status = (
+            "completed"
+            if citation_bundle.status.value == "complete"
+            and recon_bundle.status.value == "complete"
+            else "partial"
         )
-        combined_path = write_bundle(
-            citation_result.json_path.parent / "combined-signal-bundle.json", combined
-        )
-        persist_signal_bundle(settings, combined)
-        set_stage(
-            settings,
-            parent_run_id,
-            "compose",
-            "completed",
-            artifact_id=combined.bundle_id,
-            output_checksum=combined.checksum,
-        )
-        final_status = "completed" if combined.status.value == "complete" else "partial"
         if finish_parent:
-            finish_pipeline_run(
-                settings, parent_run_id, final_status, combined_bundle=combined
-            )
+            finish_pipeline_run(settings, parent_run_id, final_status)
         return IntegratedRunResult(
             parent_run_id=parent_run_id,
             citation_bundle_path=citation_path,
             recon_bundle_path=recon_path,
-            combined_bundle_path=combined_path,
             citation_bundle=citation_bundle,
             recon_bundle=recon_bundle,
-            combined_bundle=combined,
             citation_report=citation_result.report,
         )
     except Exception as exc:

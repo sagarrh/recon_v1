@@ -23,9 +23,58 @@ def persist_final_report(
     if manifest.snapshot_checksum != snapshot.checksum:
         raise ValueError("artifact manifest does not belong to the report snapshot")
     input_checksum = stable_id(*sorted(snapshot.source_bundle_checksums.values()))
+    values = (
+        snapshot.idempotency_key,
+        snapshot.client.client_id,
+        snapshot.config.report_profile,
+        snapshot.config.report_audience,
+        snapshot.schema_version,
+        snapshot.config.config_version,
+        snapshot.config.report_config_hash,
+        input_checksum,
+        Jsonb(snapshot.source_bundle_ids),
+        Jsonb(snapshot.source_bundle_checksums),
+        snapshot.status.value,
+        Jsonb(snapshot.model_dump(mode="json")),
+        Jsonb(manifest.model_dump(mode="json")),
+        Jsonb(snapshot.data_quality_flags),
+        snapshot.generated_at,
+    )
     with connect(settings) as connection, connection.cursor() as cursor:
         row = cursor.execute(
             """
+            with target as (
+              select id from public.aivc_final_reports
+              where parent_run_id = %s
+              order by generated_at desc nulls last, updated_at desc
+              limit 1
+            )
+            update public.aivc_final_reports set
+              idempotency_key = %s,
+              client_id = %s,
+              report_profile = %s,
+              report_audience = %s,
+              schema_version = %s,
+              config_version = %s,
+              report_config_hash = %s,
+              input_checksum = %s,
+              source_bundle_ids = %s,
+              source_bundle_checksums = %s,
+              status = %s,
+              structured_snapshot = %s,
+              artifact_manifest = %s,
+              data_quality_flags = %s,
+              generated_at = %s,
+              last_error = null,
+              updated_at = now()
+            where id = (select id from target)
+            returning id
+            """,
+            (snapshot.parent_run_id, *values),
+        ).fetchone()
+        if row is None:
+            row = cursor.execute(
+                """
             insert into public.aivc_final_reports(
               idempotency_key, parent_run_id, client_id, report_profile, report_audience,
               schema_version, config_version, report_config_hash, input_checksum,
@@ -34,35 +83,10 @@ def persist_final_report(
             ) values (
               %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
-            on conflict(idempotency_key) do update set
-              status = excluded.status,
-              structured_snapshot = excluded.structured_snapshot,
-              artifact_manifest = excluded.artifact_manifest,
-              data_quality_flags = excluded.data_quality_flags,
-              generated_at = excluded.generated_at,
-              last_error = null,
-              updated_at = now()
             returning id
             """,
-            (
-                snapshot.idempotency_key,
-                snapshot.parent_run_id,
-                snapshot.client.client_id,
-                snapshot.config.report_profile.value,
-                snapshot.config.report_audience.value,
-                snapshot.schema_version,
-                snapshot.config.config_version,
-                snapshot.config.report_config_hash,
-                input_checksum,
-                Jsonb(snapshot.source_bundle_ids),
-                Jsonb(snapshot.source_bundle_checksums),
-                snapshot.status.value,
-                Jsonb(snapshot.model_dump(mode="json")),
-                Jsonb(manifest.model_dump(mode="json")),
-                Jsonb(snapshot.data_quality_flags),
-                snapshot.generated_at,
-            ),
-        ).fetchone()
+                (values[0], snapshot.parent_run_id, *values[1:]),
+            ).fetchone()
         if row is None:
             raise RuntimeError("Final report upsert returned no ID.")
         connection.commit()
@@ -115,52 +139,15 @@ def _snapshot_from_row(row: dict[str, Any] | None) -> FinalReportSnapshot | None
 def load_final_report_by_parent(
     settings: Settings,
     parent_run_id: UUID,
-    *,
-    profile: str | None = None,
-    audience: str | None = None,
 ) -> FinalReportSnapshot | None:
-    filters = ["parent_run_id = %s"]
-    values: list[object] = [parent_run_id]
-    if profile is not None:
-        filters.append("report_profile = %s")
-        values.append(profile)
-    if audience is not None:
-        filters.append("report_audience = %s")
-        values.append(audience)
-    query = f"""
+    query = """
         select structured_snapshot from public.aivc_final_reports
-        where {' and '.join(filters)}
+        where parent_run_id = %s
         order by generated_at desc nulls last, created_at desc limit 1
     """
     with connect(settings) as connection, connection.cursor() as cursor:
         cursor.execute("set transaction read only")
-        row = cursor.execute(query, tuple(values)).fetchone()
-    return _snapshot_from_row(dict(row) if row else None)
-
-
-def load_latest_final_report(
-    settings: Settings,
-    client_id: UUID,
-    *,
-    profile: str | None = None,
-    audience: str | None = None,
-) -> FinalReportSnapshot | None:
-    filters = ["client_id = %s"]
-    values: list[object] = [client_id]
-    if profile is not None:
-        filters.append("report_profile = %s")
-        values.append(profile)
-    if audience is not None:
-        filters.append("report_audience = %s")
-        values.append(audience)
-    query = f"""
-        select structured_snapshot from public.aivc_final_reports
-        where {' and '.join(filters)}
-        order by generated_at desc nulls last, created_at desc limit 1
-    """
-    with connect(settings) as connection, connection.cursor() as cursor:
-        cursor.execute("set transaction read only")
-        row = cursor.execute(query, tuple(values)).fetchone()
+        row = cursor.execute(query, (parent_run_id,)).fetchone()
     return _snapshot_from_row(dict(row) if row else None)
 
 
@@ -174,6 +161,7 @@ def load_signal_bundles_for_parent(
             """
             select producer, payload from public.aivc_signal_bundles
             where parent_run_id = %s
+              and producer in ('ai_visibility', 'scout')
             order by created_at
             """,
             (parent_run_id,),
@@ -192,7 +180,7 @@ def resolve_latest_evidence_parent(
     client_id: UUID | None = None,
     company_name: str | None = None,
 ) -> UUID:
-    """Resolve the newest parent containing all three immutable producer bundles."""
+    """Resolve the newest parent containing both immutable producer bundles."""
     if (client_id is None) == (company_name is None):
         raise ValueError("Provide exactly one client identity for evidence resolution.")
     condition = (
@@ -210,8 +198,8 @@ def resolve_latest_evidence_parent(
             select count(distinct bundle.producer)
             from public.aivc_signal_bundles bundle
             where bundle.parent_run_id = pr.id
-              and bundle.producer in ('ai_visibility', 'scout', 'aivc_combined')
-          ) = 3
+              and bundle.producer in ('ai_visibility', 'scout')
+          ) = 2
         order by coalesce(pr.completed_at, pr.created_at) desc
         limit 20
     """

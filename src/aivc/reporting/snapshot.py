@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import Any
 from uuid import UUID
 
-from aivc.contracts.models import SignalBundle, stable_id
+from aivc.contracts.models import AnalysisPeriod, SignalBundle, stable_id
 from aivc.reporting.cards import build_decision_cards
 from aivc.reporting.client_presentation import build_client_presentation
 from aivc.reporting.config import ResolvedReportConfig
@@ -429,12 +429,11 @@ def build_final_report_snapshot(
     citation_report: dict[str, Any],
     citation_bundle: SignalBundle,
     recon_bundle: SignalBundle,
-    combined_bundle: SignalBundle,
     recon_reporting: dict[str, Any],
     config: ResolvedReportConfig,
 ) -> FinalReportSnapshot:
-    publication = assess_publication(citation_bundle, recon_bundle, combined_bundle)
-    client = combined_bundle.client
+    publication = assess_publication(citation_bundle, recon_bundle)
+    client = citation_bundle.client
     recon_report = ReconReportingPayload.model_validate(recon_reporting)
     if str(recon_report.client.get("client_id")) != str(client.client_id):
         raise ValueError("Recon reporting payload belongs to a different client.")
@@ -508,17 +507,18 @@ def build_final_report_snapshot(
     source_checksums = {
         citation_bundle.bundle_id: str(citation_bundle.checksum),
         recon_bundle.bundle_id: str(recon_bundle.checksum),
-        combined_bundle.bundle_id: str(combined_bundle.checksum),
     }
-    input_checksum = stable_id(*sorted(source_checksums.values()))
-    idempotency_key = stable_id(
-        parent_run_id,
-        config.profile,
-        config.audience,
-        config.config_hash,
-        input_checksum,
-        "1.2",
-    )
+    idempotency_key = stable_id("final-report", parent_run_id)
+    starts = [
+        period
+        for period in (citation_bundle.analysis_period.start, recon_bundle.analysis_period.start)
+        if period is not None
+    ]
+    ends = [
+        period
+        for period in (citation_bundle.analysis_period.end, recon_bundle.analysis_period.end)
+        if period is not None
+    ]
     snapshot = FinalReportSnapshot(
         report_id=stable_id("final-report", idempotency_key),
         idempotency_key=idempotency_key,
@@ -526,15 +526,16 @@ def build_final_report_snapshot(
         client=client,
         config=ReportConfigMetadata(
             config_version=config.config.config_version,
-            report_profile=config.profile,
-            report_audience=config.audience,
             report_config_hash=config.config_hash,
             source=config.source,
             effective_profile=config.profile_settings,
         ),
         source_bundle_ids=[citation_bundle.bundle_id, recon_bundle.bundle_id],
         source_bundle_checksums=source_checksums,
-        analysis_period=combined_bundle.analysis_period,
+        analysis_period=AnalysisPeriod(
+            start=min(starts) if starts else None,
+            end=max(ends) if ends else None,
+        ),
         status=status,
         headline=headline,
         executive_summary=executive_summary,
@@ -559,7 +560,6 @@ def build_final_report_snapshot(
             cards=cards,
             recommendations=recon_recommendations,
             signals=recon_signals,
-            profile=config.profile,
         ),
         decision_cards=cards,
         consolidated_actions=consolidated,

@@ -113,7 +113,6 @@ artifacts before optional Slack delivery, and writes:
 ```text
 output/aprio/citation-signal-bundle.json
 output/aprio/recon-signal-bundle.json
-output/aprio/combined-signal-bundle.json
 ```
 
 The database remains the complete audit ledger. During final reporting, the

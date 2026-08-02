@@ -197,7 +197,7 @@ The command:
 5. Generates Recon investigations, recommendations, and reports.
 6. Validates and persists required Recon artifacts.
 7. Delivers optional Slack messages only after persistence.
-8. Produces and persists the Recon and combined bundles.
+8. Persists the Citation and Recon source bundles under the same parent run.
 
 Expected files:
 
@@ -206,11 +206,11 @@ output/aprio/company-intelligence-report.json
 output/aprio/company-intelligence-report.md
 output/aprio/citation-signal-bundle.json
 output/aprio/recon-signal-bundle.json
-output/aprio/combined-signal-bundle.json
 ```
 
-The combined bundle is the full structured audit source. For the unified,
-client-facing report, use the next section.
+The two producer bundles are the structured integration ledger. They are not
+duplicated into a third combined bundle. For the unified client-facing report,
+use the next section.
 
 ## 9. Generate the detailed client report
 

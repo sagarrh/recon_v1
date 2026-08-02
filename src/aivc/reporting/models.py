@@ -10,7 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aivc.contracts.models import AnalysisPeriod, ClientIdentity
-from aivc.reporting.config import ProfileSettings, ReportAudience, ReportProfile
+from aivc.reporting.config import ProfileSettings
 
 
 class StrictReportModel(BaseModel):
@@ -305,8 +305,8 @@ class ArtifactRecord(StrictReportModel):
 
 class ReportConfigMetadata(StrictReportModel):
     config_version: str
-    report_profile: ReportProfile
-    report_audience: ReportAudience = ReportAudience.internal
+    report_profile: Literal["detailed"] = "detailed"
+    report_audience: Literal["client"] = "client"
     report_config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source: str
     effective_profile: ProfileSettings
@@ -369,8 +369,8 @@ class FinalReportSnapshot(StrictReportModel):
 class ArtifactManifest(StrictReportModel):
     report_id: str
     parent_run_id: UUID
-    report_profile: ReportProfile
-    report_audience: ReportAudience = ReportAudience.internal
+    report_profile: Literal["detailed"] = "detailed"
+    report_audience: Literal["client"] = "client"
     snapshot_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
     artifacts: list[ArtifactRecord]
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

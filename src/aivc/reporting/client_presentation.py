@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from aivc.reporting.config import ReportProfile
 from aivc.reporting.models import (
     ClientActionGroup,
     ClientHeadlineMetric,
@@ -84,11 +83,9 @@ def _topic_briefs(
     recommendations: list[ReconRecommendationView],
     *,
     client_name: str,
-    profile: ReportProfile,
 ) -> list[ClientTopicBrief]:
-    limit = 3 if profile is ReportProfile.decision else 5
     result: list[ClientTopicBrief] = []
-    for rank, topic in enumerate(topics[:limit], start=1):
+    for rank, topic in enumerate(topics[:5], start=1):
         matching = next(
             (
                 item
@@ -162,10 +159,8 @@ def _priorities(
     recommendations: list[ReconRecommendationView],
     signals: list[ReconSignalView],
     topics: list[TopicPerformance],
-    *,
-    profile: ReportProfile,
 ) -> list[ClientPriority]:
-    limit = 3 if profile is ReportProfile.decision else 5
+    limit = 5
     priorities: list[ClientPriority] = []
     seen: set[tuple[str, str]] = set()
     topic_index = {topic.cluster_id: topic for topic in topics}
@@ -329,7 +324,6 @@ def build_client_presentation(
     cards: list[DecisionCard],
     recommendations: list[ReconRecommendationView],
     signals: list[ReconSignalView],
-    profile: ReportProfile,
 ) -> ClientPresentation:
     strongest = max(
         (topic for topic in topics if topic.current_client_sov is not None),
@@ -345,14 +339,12 @@ def build_client_presentation(
         topics,
         recommendations,
         client_name=client_name,
-        profile=profile,
     )
     priorities = _priorities(
         cards,
         recommendations,
         signals,
         topics,
-        profile=profile,
     )
     visible_topics = sum((topic.current_client_sov or 0.0) > 0 for topic in topics)
     executive_narrative = (

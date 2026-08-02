@@ -184,7 +184,13 @@ def build_citation_bundle(
     flags = [str(flag) for flag in report.get("data_quality_flags", []) if isinstance(flag, str)]
     status = BundleStatus.partial if flags else BundleStatus.complete
     bundle = SignalBundle(
-        bundle_id=stable_id("ai_visibility", client_id, run_fingerprint, producer_version),
+        bundle_id=stable_id(
+            "ai_visibility",
+            client_id,
+            run_fingerprint,
+            producer_version,
+            parent_run_id or "standalone",
+        ),
         created_at=datetime.now(UTC),
         producer=ProducerIdentity(
             name="ai_visibility",

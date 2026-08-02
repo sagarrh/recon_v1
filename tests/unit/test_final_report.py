@@ -25,7 +25,7 @@ from aivc.database.recon_reporting import (
 )
 from aivc.reporting.artifacts import refresh_latest_artifacts, write_final_report_artifacts
 from aivc.reporting.client_presentation import build_client_presentation
-from aivc.reporting.config import ReportAudience, ReportProfile, load_report_config
+from aivc.reporting.config import load_report_config
 from aivc.reporting.context import build_report_input
 from aivc.reporting.models import (
     ClientPresentation,
@@ -146,11 +146,8 @@ def _recon_reporting_payload() -> dict[str, object]:
     }
 
 
-def _snapshot(
-    profile: ReportProfile = ReportProfile.decision,
-    audience: ReportAudience = ReportAudience.client,
-) -> FinalReportSnapshot:
-    config = load_report_config(profile=profile, audience=audience)
+def _snapshot() -> FinalReportSnapshot:
+    config = load_report_config()
     return FinalReportSnapshot(
         report_id="report-test",
         idempotency_key="idempotency-test",
@@ -162,8 +159,6 @@ def _snapshot(
         ),
         config=ReportConfigMetadata(
             config_version=config.config.config_version,
-            report_profile=config.profile,
-            report_audience=config.audience,
             report_config_hash=config.config_hash,
             source=config.source,
             effective_profile=config.profile_settings,
@@ -186,29 +181,11 @@ def _snapshot(
     ).sealed()
 
 
-def test_config_profile_override_and_detailed_is_broader(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Environment selects detailed, while an explicit CLI-style value wins.
-    monkeypatch.setenv("AIVC_REPORT_PROFILE", "detailed")
-    assert load_report_config().profile is ReportProfile.detailed
-    explicit = load_report_config(profile=ReportProfile.decision)
-    assert explicit.profile is ReportProfile.decision
-    detailed = load_report_config(profile=ReportProfile.detailed)
-    assert (
-        detailed.profile_settings.max_decision_cards >= explicit.profile_settings.max_decision_cards
-    )
-    internal = load_report_config(
-        profile=ReportProfile.detailed,
-        audience=ReportAudience.internal,
-    )
-    client = load_report_config(
-        profile=ReportProfile.detailed,
-        audience=ReportAudience.client,
-    )
-    assert internal.profile_settings == client.profile_settings
-    assert internal.audience is ReportAudience.internal
-    assert client.audience is ReportAudience.client
+def test_config_has_one_detailed_client_report_shape() -> None:
+    config = load_report_config()
+    assert config.config.config_version == "1.3"
+    assert config.profile_settings.include_query_details is True
+    assert config.profile_settings.include_full_sov_tables is True
 
 
 def test_packaged_recon_query_is_parameterized_and_read_only() -> None:
@@ -268,24 +245,21 @@ def test_recon_payload_is_retained_while_views_apply_quality_gates() -> None:
     recon = ReconReportingPayload.model_validate(source)
     assert recon.model_dump(mode="json") == source
 
-    decision = load_report_config(profile=ReportProfile.decision)
-    detailed = load_report_config(profile=ReportProfile.detailed)
-    decision_topics, decision_excluded = _topic_summary([], recon, decision)
-    detailed_topics, detailed_excluded = _topic_summary([], recon, detailed)
+    config = load_report_config()
+    topics, excluded = _topic_summary([], recon, config)
 
-    assert [topic.cluster_label for topic in decision_topics] == ["Tax advisory"]
-    assert [topic.cluster_name for topic in decision_excluded] == ["Unrelated topic"]
-    assert detailed_excluded == decision_excluded
-    assert len(decision_topics[0].positions) < len(detailed_topics[0].positions)
-    assert decision_topics[0].history
+    assert [topic.cluster_label for topic in topics] == ["Tax advisory"]
+    assert [topic.cluster_name for topic in excluded] == ["Unrelated topic"]
+    assert len(topics[0].positions) == 10
+    assert topics[0].history
 
-    signals, recommendations, runs = _recon_views(recon, detailed)
+    signals, recommendations, runs = _recon_views(recon, config)
     assert [signal.signal_id for signal in signals] == ["watch"]
     assert [item.recommendation_id for item in recommendations] == ["recommendation-watch"]
     assert [run.run_id for run in runs] == ["run-1"]
 
 
-def test_query_details_are_profile_controlled() -> None:
+def test_detailed_report_includes_query_details() -> None:
     citation_report = {
         "query_intelligence": [
             {
@@ -301,10 +275,7 @@ def test_query_details_are_profile_controlled() -> None:
             }
         ]
     }
-    decision = load_report_config(profile=ReportProfile.decision)
-    detailed = load_report_config(profile=ReportProfile.detailed)
-    assert _query_details(citation_report, decision) == []
-    assert len(_query_details(citation_report, detailed)) == 1
+    assert len(_query_details(citation_report, load_report_config())) == 1
 
 
 def test_renderers_validate_checksum_escape_html_and_keep_json_exact() -> None:
@@ -315,18 +286,6 @@ def test_renderers_validate_checksum_escape_html_and_keep_json_exact() -> None:
     payload = json.loads(render_json(snapshot))
     assert payload["checksum"] == snapshot.checksum
     assert payload["client"]["canonical_name"].startswith("Aprio")
-
-
-def test_audience_changes_presentation_without_changing_profile() -> None:
-    client = _snapshot(ReportProfile.detailed, ReportAudience.client)
-    internal = _snapshot(ReportProfile.detailed, ReportAudience.internal)
-    client_html = render_html(client)
-    internal_html = render_html(internal)
-
-    assert "Strategic conclusion" in client_html
-    assert "Query-level detail" not in client_html
-    assert "Query-level detail" in internal_html
-    assert client.config.effective_profile == internal.config.effective_profile
 
 
 def test_artifacts_are_atomic_manifested_and_validated(tmp_path: Path) -> None:
@@ -350,7 +309,7 @@ def test_artifacts_are_atomic_manifested_and_validated(tmp_path: Path) -> None:
 
 
 def test_compact_inputs_are_sealed_and_written_separately(tmp_path: Path) -> None:
-    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    snapshot = _snapshot()
     report_input = build_report_input(
         snapshot,
         prompt_sha256=client_report_prompt_sha256(),
@@ -387,7 +346,7 @@ def test_compact_inputs_are_sealed_and_written_separately(tmp_path: Path) -> Non
 def test_structured_llm_changes_prose_without_changing_measured_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    snapshot = _snapshot()
     report_input = build_report_input(
         snapshot,
         prompt_sha256=client_report_prompt_sha256(),
@@ -436,7 +395,7 @@ def test_structured_llm_changes_prose_without_changing_measured_content(
 def test_structured_llm_falls_back_to_validated_content(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    snapshot = _snapshot()
     report_input = build_report_input(
         snapshot,
         prompt_sha256=client_report_prompt_sha256(),
@@ -465,7 +424,7 @@ def test_structured_llm_falls_back_to_validated_content(
 def test_client_language_rejects_causal_absolutes_and_raw_decimals(
     conclusion: str,
 ) -> None:
-    snapshot = _snapshot(ReportProfile.detailed, ReportAudience.client)
+    snapshot = _snapshot()
     report_input = build_report_input(
         snapshot,
         prompt_sha256=client_report_prompt_sha256(),
@@ -568,7 +527,6 @@ def test_client_presentation_summarizes_instead_of_dumping_market_table() -> Non
         cards=[],
         recommendations=[recommendation],
         signals=[],
-        profile=ReportProfile.detailed,
     )
 
     assert presentation.topics[0].client_sov == 7.5
@@ -609,11 +567,6 @@ def test_recon_recommendation_requires_a_publishable_recon_signal() -> None:
         )
         .sealed()
     )
-    combined = (
-        bundle("aivc_combined", "combined")
-        .model_copy(update={"source_bundle_ids": [citation.bundle_id, recon.bundle_id]})
-        .sealed()
-    )
-    publication = assess_publication(citation, recon, combined)
+    publication = assess_publication(citation, recon)
     assert publication.recon_signals == ()
     assert publication.recommendations == ()

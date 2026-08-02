@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from uuid import UUID
 
 from ai_visibility.config.settings import Settings
 from ai_visibility.database.migrations import apply_migrations
 from aivc.config.settings import AivcSettings
+from aivc.contracts.models import SignalBundle
 from aivc.database.final_reports import (
     load_signal_bundles_for_parent,
     mark_final_report_failed,
@@ -19,7 +21,7 @@ from aivc.reporting.artifacts import (
     refresh_latest_artifacts,
     write_final_report_artifacts,
 )
-from aivc.reporting.config import ReportAudience, ReportProfile, load_report_config
+from aivc.reporting.config import load_report_config
 from aivc.reporting.context import ReportInputSnapshot, build_report_input
 from aivc.reporting.models import ArtifactManifest, FinalReportSnapshot
 from aivc.reporting.narrative import (
@@ -42,6 +44,15 @@ class FinalReportRunResult:
     database_report_id: UUID
     artifact_paths: dict[str, Path]
     latest_paths: dict[str, Path]
+
+
+def _report_week(*bundles: SignalBundle) -> date | None:
+    ends = [
+        bundle.analysis_period.end
+        for bundle in bundles
+        if bundle.analysis_period.end is not None
+    ]
+    return max(ends).date() if ends else None
 
 
 def _citation_report_from_bundle(bundle_path: str | None) -> dict[str, object]:
@@ -111,11 +122,7 @@ def run_final_report_pipeline(
     recon_config = get_config()
     if not recon_config.openrouter_api_key.strip():
         raise RuntimeError("OPENROUTER_API_KEY is required for the Recon synthesis stages.")
-    config = load_report_config(
-        config_path=config_path,
-        profile=ReportProfile.detailed,
-        audience=ReportAudience.client,
-    )
+    config = load_report_config(config_path=config_path)
     integrated = run_integrated_pipeline(
         settings,
         shared_settings,
@@ -130,7 +137,6 @@ def run_final_report_pipeline(
         set_stage(settings, parent_run_id, current_stage, "running")
         integrated.citation_bundle.verify_checksum()
         integrated.recon_bundle.verify_checksum()
-        integrated.combined_bundle.verify_checksum()
         set_stage(settings, parent_run_id, current_stage, "completed")
 
         current_stage = "publication_gate"
@@ -139,14 +145,10 @@ def run_final_report_pipeline(
 
         current_stage = "report_context"
         set_stage(settings, parent_run_id, current_stage, "running")
-        report_week = (
-            integrated.combined_bundle.analysis_period.end.date()
-            if integrated.combined_bundle.analysis_period.end
-            else None
-        )
+        report_week = _report_week(integrated.citation_bundle, integrated.recon_bundle)
         recon_reporting = load_recon_reporting_payload(
             settings,
-            client_id=integrated.combined_bundle.client.client_id,
+            client_id=integrated.citation_bundle.client.client_id,
             report_week=report_week,
             history_weeks=config.profile_settings.history_weeks,
         )
@@ -155,7 +157,6 @@ def run_final_report_pipeline(
             citation_report=integrated.citation_report,
             citation_bundle=integrated.citation_bundle,
             recon_bundle=integrated.recon_bundle,
-            combined_bundle=integrated.combined_bundle,
             recon_reporting=recon_reporting,
             config=config,
         )
@@ -240,7 +241,6 @@ def run_final_report_pipeline(
             settings,
             parent_run_id,
             parent_status,
-            combined_bundle=integrated.combined_bundle,
         )
         return FinalReportRunResult(
             snapshot=snapshot,
@@ -265,16 +265,12 @@ def render_historical_report(
 ) -> FinalReportRunResult:
     """Render exact persisted sources without rerunning either producer."""
     apply_migrations(settings)
-    config = load_report_config(
-        config_path=config_path,
-        profile=ReportProfile.detailed,
-        audience=ReportAudience.client,
-    )
+    config = load_report_config(config_path=config_path)
     partial_allowed = (
         allow_partial if allow_partial is not None else config.config.report.allow_partial
     )
     bundles = load_signal_bundles_for_parent(settings, parent_run_id)
-    required = {"ai_visibility", "scout", "aivc_combined"}
+    required = {"ai_visibility", "scout"}
     missing = sorted(required - set(bundles))
     if missing:
         raise RuntimeError(f"Historical source bundles are missing: {', '.join(missing)}")
@@ -284,14 +280,10 @@ def render_historical_report(
         None,
     )
     citation_report = _citation_report_from_bundle(reference.json_path if reference else None)
-    report_week = (
-        bundles["aivc_combined"].analysis_period.end.date()
-        if bundles["aivc_combined"].analysis_period.end
-        else None
-    )
+    report_week = _report_week(bundles["ai_visibility"], bundles["scout"])
     recon_reporting = load_recon_reporting_payload(
         settings,
-        client_id=bundles["aivc_combined"].client.client_id,
+        client_id=bundles["ai_visibility"].client.client_id,
         report_week=report_week,
         history_weeks=config.profile_settings.history_weeks,
     )
@@ -300,7 +292,6 @@ def render_historical_report(
         citation_report=citation_report,
         citation_bundle=citation,
         recon_bundle=bundles["scout"],
-        combined_bundle=bundles["aivc_combined"],
         recon_reporting=recon_reporting,
         config=config,
     )
