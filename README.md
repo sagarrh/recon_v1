@@ -17,7 +17,7 @@ The system resolves the client, loads all of its valid historical monitoring run
 
 - `src/ai_visibility/` — Citation normalization, analysis, page intelligence, and reports.
 - `src/scout/` — integrated Recon V1 engine.
-- `src/aivc/` — shared contracts, orchestration, compact context, and final report.
+- `src/aivc/` — shared contracts, orchestration, and compact report-input preparation.
 - `migrations/` — application-managed PostgreSQL migrations.
 - `config/` — operator-editable report configuration.
 - `schemas/` — public JSON Schema and API contracts.
@@ -93,7 +93,7 @@ uv run aivc db check
 uv run aivc db audit
 uv run aivc citations generate --company "Aprio"
 uv run aivc run --company "Aprio"
-uv run aivc report generate --company "Aprio" --allow-partial
+uv run aivc report generate --company "Aprio"
 ```
 
 `aivc citations generate` runs independently and writes the established
@@ -107,22 +107,20 @@ output/aprio/citation-signal-bundle.json
 output/aprio/recon-signal-bundle.json
 ```
 
-The database remains the complete audit ledger. During final reporting, the
-application executes the packaged Recon report query in a PostgreSQL read-only
-transaction, reduces its
-result and the Citation evidence into two compact, schema-validated inputs, and
-writes the exact prompt envelope used for narrative generation.
+The database remains the complete audit ledger. During report-input preparation,
+the application executes the packaged Recon query in a PostgreSQL read-only
+transaction and reduces its result plus Citation evidence into compact,
+checksummed JSON inputs.
 
 By default, `aivc report generate` resolves the newest complete persisted parent
 for the company and does not rerun either producer. Add `--refresh-data` only
 when a new Citation + Recon execution is deliberately required.
 
-There is one final-report product: a detailed client-facing report. The LLM
-writes only validated narrative fields from the compact evidence envelope;
-exact metrics, actions, HTML structure, escaping, and persistence remain
-deterministic. If narrative generation is unavailable, the report uses the
-validated deterministic fallback and discloses that limitation. NOISE data
-remains in the database ledger but is never presented as a finding.
+The application stops at `report-input-snapshot.json`; it does not call an
+additional final-report LLM or render final HTML/Markdown. Use the reusable
+prompt in `docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md` with Codex or Claude
+Code. NOISE data remains in the database ledger but is excluded from the compact
+client-facing input.
 The existing citation and Recon reports remain independently usable.
 The legacy Recon LLM citation analyzer is off by default and can be
 enabled only with `AIVC_RECON_LEGACY_AI_ANALYSIS_ENABLED=true`.

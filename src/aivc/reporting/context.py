@@ -51,11 +51,9 @@ class ReconReportInput(StrictReportModel):
 
 
 class ReportInputSnapshot(StrictReportModel):
-    """Exact compact evidence envelope supplied to the report narrative model."""
+    """Exact compact Citation + Recon envelope used for manual report creation."""
 
     schema_version: Literal["1.0"] = "1.0"
-    prompt_version: Literal["1.0"] = "1.0"
-    prompt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     parent_run_id: str
     client: ClientIdentity
     analysis_period: AnalysisPeriod
@@ -95,8 +93,6 @@ def _source(snapshot: FinalReportSnapshot, index: int) -> tuple[str, str]:
 
 def build_report_input(
     snapshot: FinalReportSnapshot,
-    *,
-    prompt_sha256: str,
 ) -> ReportInputSnapshot:
     """Reduce the validated snapshot to the facts useful for client report writing."""
     snapshot.verify_checksum()
@@ -114,7 +110,6 @@ def build_report_input(
         action.action_id for card in citation_cards for action in card.recommended_actions
     }
     report_input = ReportInputSnapshot(
-        prompt_sha256=prompt_sha256,
         parent_run_id=str(snapshot.parent_run_id),
         client=snapshot.client,
         analysis_period=snapshot.analysis_period,

@@ -2,9 +2,9 @@
 
 ## Product decision
 
-The system publishes one report product: a detailed, client-facing AI
-Visibility and Competitive Intelligence Report. Decision/internal variants are
-not part of the public CLI.
+The backend produces one compact, checksummed evidence input containing AI
+Citation and Recon facts. Codex or Claude Code creates the final client-facing
+HTML manually from that input and the reusable report prompt.
 
 ## Data flow
 
@@ -13,54 +13,43 @@ public.ai_monitoring ──> Citation normalization ──> compact Citation inp
                                                                             │
 Recon run ──> Agentic DB ──> read-only Recon SQL ──> compact Recon input ───┤
                                                                             │
-                                                validated prompt envelope ──┘
+                                                     combined input JSON <──┘
                                                             │
                                                             v
-                                                structured LLM narrative
+                                              Codex/Claude + reusable prompt
                                                             │
                                                             v
-                                             deterministic HTML/MD renderer
+                                                   standalone client HTML
 ```
 
-A fresh report must run Recon and persist its output before the Recon SQL is
-executed. A historical rerender may reuse a completed evidence parent and does
-not rerun either producer.
+A fresh cycle runs and persists Citation and Recon before executing the
+read-only Recon query. Historical input preparation reuses one exact parent and
+does not rerun either producer.
 
 ## Storage levels
 
-1. **Ledger:** complete Citation and Recon database records used for audit,
-   debugging, and future reconstruction. The ledger is not sent wholesale to
-   the narrative model.
-2. **Report inputs:** compact Citation JSON, compact Recon JSON, and the exact
-   combined prompt envelope. These are schema-validated and checksummed.
-3. **Report content:** structured narrative JSON returned by the LLM. Metrics
-   and recommended actions remain deterministic.
-4. **Presentation:** Markdown and HTML rendered by application templates.
+1. **Ledger:** complete Citation and Recon database records for audit, debugging,
+   page history, and future reconstruction.
+2. **Source bundles:** one Citation bundle and one Recon bundle per parent run.
+3. **Report inputs:** compact Citation JSON, compact Recon JSON, and the combined
+   `report-input-snapshot.json`, all checksummed and written atomically.
+4. **Presentation:** a manually generated standalone HTML file. It is not written
+   to the database by the application.
 
 ## Database disposition
 
 | Group | Current disposition | Reason |
 |---|---|---|
 | `public.ai_monitoring` | Keep, immutable | Authoritative Citation ledger |
-| Recon source/write tables | Keep | Recon must populate them before reporting SQL runs |
-| `ai_visibility_*` normalization and page tables | Keep | Correct metrics, evidence provenance, and safe page intelligence |
-| `aivc_pipeline_runs`, `aivc_pipeline_stages` | Keep | Run ordering, failure recovery, and auditability |
-| `aivc_final_reports` | Keep | One durable final report snapshot and artifact manifest |
-| `aivc_signal_bundles` | Keep two source bundles per parent | Historical resolution depends on the Citation and Scout checksums; combined copies were removed |
-| `aivc_delivery_log` | Proposed drop | Empty and has no runtime code references |
-
-The combined signal bundle and legacy profile/audience runtime branches have
-been removed. The completed cleanup audit is archived under
-`docs/archive/audits/`.
+| Recon source/write tables | Keep | Recon populates them before reporting SQL runs |
+| `ai_visibility_*` tables | Keep | Metrics, provenance, jobs, and page intelligence |
+| `aivc_pipeline_runs`, `aivc_pipeline_stages` | Keep | Run ordering and auditability |
+| `aivc_signal_bundles` | Keep two bundles per parent | Exact historical reconstruction |
+| `aivc_final_reports` | Legacy, no new runtime writes | Migration history remains intact; cleanup requires a separately approved DB migration |
 
 ## LLM boundary
 
-The LLM receives the compact prompt envelope and writes prose fields only. It
-cannot change measured metrics, SOV positions, evidence identifiers, or
-recommended actions. Its response is validated against a strict Pydantic
-schema. Unsupported numeric claims cause a deterministic fallback unless the
-operator has configured LLM failure to be fatal.
-
-The system prompt is versioned at
-`src/aivc/resources/prompts/client_report_system.md`; its SHA-256 checksum is
-stored in every prompt envelope.
+Recon may use its configured models during investigation and recommendation
+generation. The final report-input stage makes no additional LLM call. The
+manual report generator receives only `report-input-snapshot.json` and the
+reusable prompt at `docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md`.

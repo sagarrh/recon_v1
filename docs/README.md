@@ -8,6 +8,9 @@
   behavior and module responsibilities.
 - [Simplified reporting architecture](architecture/SIMPLIFIED_REPORTING_ARCHITECTURE.md)
   — current two-source report data flow.
+- [Reusable client report prompt](prompts/CLIENT_REPORT_GENERATION_PROMPT.md) —
+  generate a client HTML report from the compact Citation + Recon input while
+  reusing the supplied report sample as its visual reference.
 
 ## Future work
 
@@ -21,9 +24,3 @@
   query; runtime code uses `src/aivc/resources/sql/recon_report.sql`.
 - `reference/upstream/geo_edge_function.ts` — supplied upstream GEO edge function.
 - `reference/report-samples/report_jaggaer.html` — supplied client-facing report example.
-
-## Archive
-
-`archive/` contains completed implementation plans, old specifications, reviews, incident
-notes, migration history imported from Recon, and the executed AIVC cleanup audit. Archive
-documents explain historical decisions but are not operating instructions.

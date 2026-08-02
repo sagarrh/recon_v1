@@ -286,16 +286,7 @@ class EvidenceIndexItem(StrictReportModel):
 
 
 class ArtifactRecord(StrictReportModel):
-    artifact_type: Literal[
-        "json",
-        "markdown",
-        "html",
-        "manifest",
-        "citation_input",
-        "recon_input",
-        "report_input",
-        "report_content",
-    ]
+    artifact_type: Literal["citation_input", "recon_input", "report_input"]
     path: str
     byte_size: int = Field(ge=0)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -305,8 +296,6 @@ class ArtifactRecord(StrictReportModel):
 
 class ReportConfigMetadata(StrictReportModel):
     config_version: str
-    report_profile: Literal["detailed"] = "detailed"
-    report_audience: Literal["client"] = "client"
     report_config_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source: str
     effective_profile: ProfileSettings
@@ -369,8 +358,6 @@ class FinalReportSnapshot(StrictReportModel):
 class ArtifactManifest(StrictReportModel):
     report_id: str
     parent_run_id: UUID
-    report_profile: Literal["detailed"] = "detailed"
-    report_audience: Literal["client"] = "client"
     snapshot_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
     artifacts: list[ArtifactRecord]
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

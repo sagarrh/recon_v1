@@ -28,15 +28,8 @@ class ProfileSettings(StrictConfigModel):
     include_data_quality_appendix: bool
 
 
-class ReportDefaults(StrictConfigModel):
-    write_latest_copies: bool = True
-    allow_partial: bool = False
-    narrative_mode: Literal["reuse_validated", "structured_llm"] = "structured_llm"
-
-
 class ReportingConfig(StrictConfigModel):
     config_version: Literal["1.3"] = "1.3"
-    report: ReportDefaults
     limits: ProfileSettings
 
 

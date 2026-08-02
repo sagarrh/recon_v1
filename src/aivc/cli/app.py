@@ -12,17 +12,13 @@ from ai_visibility.config.settings import get_settings
 from ai_visibility.database.validation import check_database
 from aivc.config import get_aivc_settings
 from aivc.database import audit_shared_schema
-from aivc.database.final_reports import (
-    load_final_report_by_parent,
-    resolve_latest_evidence_parent,
-)
+from aivc.database.evidence import resolve_latest_evidence_parent
 from aivc.orchestration import (
-    render_historical_report,
-    run_final_report_pipeline,
+    prepare_fresh_report_inputs,
+    prepare_historical_report_inputs,
     run_integrated_pipeline,
 )
 from aivc.producers import generate_citation_bundle
-from aivc.reporting.validation import validate_final_report_file
 
 app = typer.Typer(
     name="aivc",
@@ -31,7 +27,7 @@ app = typer.Typer(
 )
 db_app = typer.Typer(help="Validate shared database configuration.")
 citations_app = typer.Typer(help="Run the AI citation producer independently.")
-report_app = typer.Typer(help="Generate and inspect the detailed client report.")
+report_app = typer.Typer(help="Prepare compact Citation + Recon inputs for a client report.")
 app.add_typer(db_app, name="db")
 app.add_typer(citations_app, name="citations")
 app.add_typer(report_app, name="report")
@@ -130,18 +126,14 @@ def _report_result(result: Any) -> dict[str, Any]:
         "client_id": snapshot.client.client_id,
         "company": snapshot.client.canonical_name,
         "parent_run_id": snapshot.parent_run_id,
-        "report_id": snapshot.report_id,
-        "database_report_id": result.database_report_id,
-        "report_type": "detailed_client",
-        "config_hash": snapshot.config.report_config_hash,
-        "snapshot_checksum": snapshot.checksum,
+        "report_input_checksum": result.report_input.checksum,
         "source_bundle_ids": snapshot.source_bundle_ids,
         "source_bundle_checksums": snapshot.source_bundle_checksums,
         "decision_card_count": len(snapshot.decision_cards),
         "action_count": len(snapshot.consolidated_actions),
         "data_quality_flags": snapshot.data_quality_flags,
         "limitations": snapshot.limitations,
-        "artifacts": {
+        "inputs": {
             record.artifact_type: {
                 "path": record.path,
                 "sha256": record.sha256,
@@ -149,7 +141,8 @@ def _report_result(result: Any) -> dict[str, Any]:
             }
             for record in result.manifest.artifacts
         },
-        "latest_copies_refreshed": bool(result.latest_paths),
+        "latest_inputs_refreshed": bool(result.latest_paths),
+        "manual_report_prompt": "docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md",
     }
 
 
@@ -172,19 +165,15 @@ def report_generate(
         Path | None,
         typer.Option("--config", help="Reporting TOML configuration path."),
     ] = None,
-    allow_partial: Annotated[
-        bool | None,
-        typer.Option("--allow-partial/--no-allow-partial", help="Allow partial publication."),
-    ] = None,
     refresh_data: Annotated[
         bool,
         typer.Option(
             "--refresh-data",
-            help="Explicitly rerun Citation and Recon before creating the report.",
+            help="Explicitly rerun Citation and Recon before preparing report inputs.",
         ),
     ] = False,
 ) -> None:
-    """Generate a report from persisted evidence; refresh producers only on request."""
+    """Prepare compact report inputs; refresh Citation and Recon only on request."""
     if refresh_data:
         if parent_run_id is not None:
             raise typer.BadParameter("--refresh-data cannot be combined with --parent-run-id.")
@@ -193,13 +182,12 @@ def report_generate(
                 "With --refresh-data, provide exactly one of --company or --client-id."
             )
         result = _run(
-            lambda: run_final_report_pipeline(
+            lambda: prepare_fresh_report_inputs(
                 get_settings(),
                 get_aivc_settings(),
                 company_name=company,
                 client_id=client_id,
                 config_path=config,
-                allow_partial=allow_partial,
             )
         )
     else:
@@ -221,79 +209,13 @@ def report_generate(
                 )
             )
         result = _run(
-            lambda: render_historical_report(
+            lambda: prepare_historical_report_inputs(
                 get_settings(),
                 parent_run_id=parent_run_id,
                 config_path=config,
-                allow_partial=allow_partial,
             )
         )
     _print(_report_result(result))
-
-
-@report_app.command("render")
-def report_render(
-    parent_run_id: Annotated[UUID, typer.Option("--parent-run-id")],
-    config: Annotated[Path | None, typer.Option("--config")] = None,
-    allow_partial: Annotated[
-        bool | None,
-        typer.Option("--allow-partial/--no-allow-partial"),
-    ] = None,
-) -> None:
-    """Rerender one exact persisted run without rerunning producers."""
-    result = _run(
-        lambda: render_historical_report(
-            get_settings(),
-            parent_run_id=parent_run_id,
-            config_path=config,
-            allow_partial=allow_partial,
-        )
-    )
-    _print(_report_result(result))
-
-
-@report_app.command("show")
-def report_show(
-    parent_run_id: Annotated[UUID, typer.Option("--parent-run-id")],
-) -> None:
-    """Show concise metadata for a persisted final report."""
-    snapshot = _run(
-        lambda: load_final_report_by_parent(
-            get_settings(),
-            parent_run_id,
-        )
-    )
-    if snapshot is None:
-        raise typer.BadParameter("No persisted report matched that parent run and profile.")
-    _print(
-        {
-            "status": snapshot.status,
-            "report_id": snapshot.report_id,
-            "parent_run_id": snapshot.parent_run_id,
-            "client": snapshot.client.model_dump(mode="json"),
-            "report_type": "detailed_client",
-            "checksum": snapshot.checksum,
-            "decision_card_count": len(snapshot.decision_cards),
-            "action_count": len(snapshot.consolidated_actions),
-            "data_quality_flags": snapshot.data_quality_flags,
-        }
-    )
-
-
-@report_app.command("validate")
-def report_validate(
-    path: Annotated[Path, typer.Option("--path", help="Final-report JSON path.")],
-) -> None:
-    """Validate the schema and checksum of a local final report."""
-    snapshot = _run(lambda: validate_final_report_file(path))
-    _print(
-        {
-            "valid": True,
-            "report_id": snapshot.report_id,
-            "parent_run_id": snapshot.parent_run_id,
-            "checksum": snapshot.checksum,
-        }
-    )
 
 
 def main() -> None:

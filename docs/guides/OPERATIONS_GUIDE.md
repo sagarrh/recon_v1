@@ -212,85 +212,58 @@ The two producer bundles are the structured integration ledger. They are not
 duplicated into a third combined bundle. For the unified client-facing report,
 use the next section.
 
-## 9. Generate the detailed client report
+## 9. Prepare the detailed client-report input
 
 For a fresh reporting cycle, use `--refresh-data`. The ordering is enforced:
 AI Citations runs, Recon runs and persists its client data, and only then does
 the report stage execute the read-only Recon reporting SQL.
 
 ```powershell
-uv run aivc report generate --company "Aprio" --refresh-data --allow-partial
+uv run aivc report generate --company "Aprio" --refresh-data
 ```
 
-To regenerate presentation from an already completed Citation + Recon parent,
+To rebuild the compact input from an already completed Citation + Recon parent,
 omit `--refresh-data`:
 
 ```powershell
-uv run aivc report generate --company "Aprio" --allow-partial
+uv run aivc report generate --company "Aprio"
 ```
 
 For exact reproducibility, prefer `--parent-run-id`. For exact client selection,
 prefer `--client-id`; a duplicated company name fails rather than guessing.
 
-The public CLI now produces one product: a detailed client-facing report. The
-former decision/internal combinations are no longer CLI options.
-
-Final-report generation runs the packaged, parameterized Recon report query
+Report-input preparation runs the packaged, parameterized Recon report query
 using the exact client UUID, reporting week, and
 configured history window. That query is executed after `SET TRANSACTION READ
 ONLY`; it fetches data and cannot modify the database. The complete source
 records remain in the database ledger. Only compact, report-ready Citation and
-Recon inputs are supplied to the narrative model. NOISE-classified rows remain
-auditable in the ledger but are not shown as client findings.
-
-Narrative generation uses the configured Recon/OpenRouter credentials. These
-optional controls are available:
-
-```dotenv
-AIVC_REPORT_CONFIG_PATH=
-AIVC_REPORT_LLM_MODEL=google/gemini-2.5-flash-lite
-AIVC_REPORT_LLM_MAX_TOKENS=12000
-AIVC_REPORT_LLM_REQUIRED=false
-```
-
-The default uses Recon's existing lightweight summarization model. An empty
-model value reuses Recon's configured synthesis model. With
-`AIVC_REPORT_LLM_REQUIRED=false`, an unavailable LLM produces a disclosed,
-deterministic narrative fallback instead of losing the report.
-
-Partial reports are truthful but have disclosed evidence limitations. They are
-kept run-scoped and persisted; latest convenience copies are refreshed only
-when the report is complete, or when `--allow-partial` is explicitly supplied.
+Recon inputs are written to disk. NOISE-classified rows remain auditable in the
+ledger but are not included as client findings. Quality flags and limitations
+are always retained in the JSON; no `--allow-partial` publication switch is
+needed because this command prepares evidence rather than publishing a report.
 
 Expected additional files:
 
 ```text
-output/aprio/final-report.json
-output/aprio/final-report.md
-output/aprio/final-report.html
-output/aprio/final-report-content.json
 output/aprio/inputs/ai-citation-report-input.json
 output/aprio/inputs/recon-report-input.json
 output/aprio/inputs/report-input-snapshot.json
-output/aprio/runs/<parent-run-id>/artifact-manifest.json
-output/aprio/runs/<parent-run-id>/final-report.json
-output/aprio/runs/<parent-run-id>/final-report.md
-output/aprio/runs/<parent-run-id>/final-report.html
+output/aprio/runs/<parent-run-id>/input-manifest.json
+output/aprio/runs/<parent-run-id>/inputs/report-input-snapshot.json
 ```
 
-Inspect, validate, or rerender an exact historical parent without rerunning
-either producer:
+Rebuild an exact historical parent without rerunning either producer:
 
 ```powershell
-uv run aivc report show --parent-run-id "PARENT-UUID"
-uv run aivc report validate --path "output/aprio/final-report.json"
-uv run aivc report render --parent-run-id "PARENT-UUID" --allow-partial
+uv run aivc report generate --parent-run-id "PARENT-UUID"
 ```
 
-Historical rendering always reads the Citation and producer bundles attached to
+Historical preparation always reads the Citation and producer bundles attached to
 that parent run and executes a read-only Recon reconstruction bounded to that
-parent's reporting week. It never reruns Recon unless `--refresh-data` is
-explicitly supplied.
+parent's reporting week. It never reruns Recon.
+
+Generate the final standalone HTML manually with
+`docs/prompts/CLIENT_REPORT_GENERATION_PROMPT.md`.
 
 ## 10. Database safety
 

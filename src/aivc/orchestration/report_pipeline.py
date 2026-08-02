@@ -10,47 +10,31 @@ from ai_visibility.config.settings import Settings
 from ai_visibility.database.migrations import apply_migrations
 from aivc.config.settings import AivcSettings
 from aivc.contracts.models import SignalBundle
-from aivc.database.final_reports import (
-    load_signal_bundles_for_parent,
-    mark_final_report_failed,
-    persist_final_report,
-)
+from aivc.database.evidence import load_signal_bundles_for_parent
 from aivc.database.orchestration import finish_pipeline_run, set_stage
 from aivc.database.recon_reporting import load_recon_reporting_payload
-from aivc.reporting.artifacts import (
-    refresh_latest_artifacts,
-    write_final_report_artifacts,
-)
+from aivc.reporting.artifacts import write_report_inputs
 from aivc.reporting.config import load_report_config
 from aivc.reporting.context import ReportInputSnapshot, build_report_input
 from aivc.reporting.models import ArtifactManifest, FinalReportSnapshot
-from aivc.reporting.narrative import (
-    ReuseValidatedNarrative,
-    StructuredLlmNarrative,
-    client_report_prompt_sha256,
-)
 from aivc.reporting.snapshot import build_final_report_snapshot
-from aivc.reporting.validation import validate_final_report_payload
 from scout.config import get_config
 
 from .pipeline import run_integrated_pipeline
 
 
 @dataclass(frozen=True)
-class FinalReportRunResult:
+class ReportInputRunResult:
     snapshot: FinalReportSnapshot
     report_input: ReportInputSnapshot
     manifest: ArtifactManifest
-    database_report_id: UUID
     artifact_paths: dict[str, Path]
     latest_paths: dict[str, Path]
 
 
 def _report_week(*bundles: SignalBundle) -> date | None:
     ends = [
-        bundle.analysis_period.end
-        for bundle in bundles
-        if bundle.analysis_period.end is not None
+        bundle.analysis_period.end for bundle in bundles if bundle.analysis_period.end is not None
     ]
     return max(ends).date() if ends else None
 
@@ -67,62 +51,58 @@ def _citation_report_from_bundle(bundle_path: str | None) -> dict[str, object]:
     return payload
 
 
-def _write_persist_and_refresh(
+def _build_and_write(
     settings: Settings,
-    snapshot: FinalReportSnapshot,
-    report_input: ReportInputSnapshot,
     *,
-    write_latest: bool,
-) -> FinalReportRunResult:
-    validate_final_report_payload(snapshot.model_dump(mode="json"))
-    manifest, artifact_paths = write_final_report_artifacts(
+    parent_run_id: UUID,
+    citation_report: dict[str, object],
+    citation_bundle: SignalBundle,
+    recon_bundle: SignalBundle,
+    config_path: Path | None,
+) -> ReportInputRunResult:
+    config = load_report_config(config_path=config_path)
+    report_week = _report_week(citation_bundle, recon_bundle)
+    recon_reporting = load_recon_reporting_payload(
+        settings,
+        client_id=citation_bundle.client.client_id,
+        report_week=report_week,
+        history_weeks=config.profile_settings.history_weeks,
+    )
+    snapshot = build_final_report_snapshot(
+        parent_run_id=parent_run_id,
+        citation_report=citation_report,
+        citation_bundle=citation_bundle,
+        recon_bundle=recon_bundle,
+        recon_reporting=recon_reporting,
+        config=config,
+    )
+    report_input = build_report_input(snapshot)
+    manifest, artifact_paths, latest_paths = write_report_inputs(
         settings.report_output_dir,
         snapshot,
-        report_input=report_input,
-        write_latest_copies=False,
+        report_input,
     )
-    database_report_id = persist_final_report(settings, snapshot, manifest)
-    try:
-        latest_paths = (
-            refresh_latest_artifacts(
-                settings.report_output_dir,
-                snapshot,
-                report_input,
-            )
-            if write_latest
-            else {}
-        )
-    except Exception as exc:
-        mark_final_report_failed(
-            settings,
-            idempotency_key=snapshot.idempotency_key,
-            error=exc,
-        )
-        raise
-    return FinalReportRunResult(
+    return ReportInputRunResult(
         snapshot=snapshot,
         report_input=report_input,
         manifest=manifest,
-        database_report_id=database_report_id,
         artifact_paths=artifact_paths,
         latest_paths=latest_paths,
     )
 
 
-def run_final_report_pipeline(
+def prepare_fresh_report_inputs(
     settings: Settings,
     shared_settings: AivcSettings,
     *,
     company_name: str | None = None,
     client_id: UUID | None = None,
     config_path: Path | None = None,
-    allow_partial: bool | None = None,
-) -> FinalReportRunResult:
+) -> ReportInputRunResult:
+    """Run Citation + Recon, then write compact inputs without rendering a report."""
     shared_settings.require_supabase_key()
-    recon_config = get_config()
-    if not recon_config.openrouter_api_key.strip():
+    if not get_config().openrouter_api_key.strip():
         raise RuntimeError("OPENROUTER_API_KEY is required for the Recon synthesis stages.")
-    config = load_report_config(config_path=config_path)
     integrated = run_integrated_pipeline(
         settings,
         shared_settings,
@@ -132,146 +112,46 @@ def run_final_report_pipeline(
         deliver=False,
     )
     parent_run_id = integrated.parent_run_id
-    current_stage = "report_preflight"
+    stage = "report_input"
     try:
-        set_stage(settings, parent_run_id, current_stage, "running")
+        set_stage(settings, parent_run_id, stage, "running")
         integrated.citation_bundle.verify_checksum()
         integrated.recon_bundle.verify_checksum()
-        set_stage(settings, parent_run_id, current_stage, "completed")
-
-        current_stage = "publication_gate"
-        set_stage(settings, parent_run_id, current_stage, "running")
-        set_stage(settings, parent_run_id, current_stage, "completed")
-
-        current_stage = "report_context"
-        set_stage(settings, parent_run_id, current_stage, "running")
-        report_week = _report_week(integrated.citation_bundle, integrated.recon_bundle)
-        recon_reporting = load_recon_reporting_payload(
+        result = _build_and_write(
             settings,
-            client_id=integrated.citation_bundle.client.client_id,
-            report_week=report_week,
-            history_weeks=config.profile_settings.history_weeks,
-        )
-        snapshot = build_final_report_snapshot(
             parent_run_id=parent_run_id,
             citation_report=integrated.citation_report,
             citation_bundle=integrated.citation_bundle,
             recon_bundle=integrated.recon_bundle,
-            recon_reporting=recon_reporting,
-            config=config,
+            config_path=config_path,
         )
-        report_input = build_report_input(
-            snapshot,
-            prompt_sha256=client_report_prompt_sha256(),
-        )
-        narrative = (
-            StructuredLlmNarrative(shared_settings)
-            if config.config.report.narrative_mode == "structured_llm"
-            else ReuseValidatedNarrative()
-        )
-        snapshot = narrative.enrich(snapshot, report_input)
         set_stage(
             settings,
             parent_run_id,
-            current_stage,
+            stage,
             "completed",
-            output_checksum=snapshot.checksum,
+            artifact_id=result.report_input.checksum,
+            output_checksum=result.report_input.checksum,
         )
-
-        current_stage = "report_snapshot"
-        set_stage(settings, parent_run_id, current_stage, "running")
-        validate_final_report_payload(snapshot.model_dump(mode="json"))
-        set_stage(
-            settings,
-            parent_run_id,
-            current_stage,
-            "completed",
-            artifact_id=snapshot.report_id,
-            output_checksum=snapshot.checksum,
-        )
-
-        current_stage = "report_render"
-        set_stage(settings, parent_run_id, current_stage, "running")
-        manifest, artifact_paths = write_final_report_artifacts(
-            settings.report_output_dir,
-            snapshot,
-            report_input=report_input,
-            write_latest_copies=False,
-        )
-        set_stage(settings, parent_run_id, current_stage, "completed")
-
-        current_stage = "report_persist"
-        set_stage(settings, parent_run_id, current_stage, "running")
-        database_report_id = persist_final_report(settings, snapshot, manifest)
-        partial_allowed = (
-            allow_partial if allow_partial is not None else config.config.report.allow_partial
-        )
-        publishable = snapshot.status.value == "complete" or (
-            snapshot.status.value == "partial" and partial_allowed
-        )
-        try:
-            latest_paths = (
-                refresh_latest_artifacts(
-                    settings.report_output_dir,
-                    snapshot,
-                    report_input,
-                )
-                if config.config.report.write_latest_copies and publishable
-                else {}
-            )
-        except Exception as exc:
-            mark_final_report_failed(
-                settings,
-                idempotency_key=snapshot.idempotency_key,
-                error=exc,
-            )
-            raise
-        set_stage(
-            settings,
-            parent_run_id,
-            current_stage,
-            "completed",
-            artifact_id=str(database_report_id),
-            output_checksum=snapshot.checksum,
-        )
-        parent_status = "completed" if snapshot.status.value == "complete" else "partial"
-        if snapshot.status.value == "blocked":
-            parent_status = "failed"
-        finish_pipeline_run(
-            settings,
-            parent_run_id,
-            parent_status,
-        )
-        return FinalReportRunResult(
-            snapshot=snapshot,
-            report_input=report_input,
-            manifest=manifest,
-            database_report_id=database_report_id,
-            artifact_paths=artifact_paths,
-            latest_paths=latest_paths,
-        )
+        parent_status = "completed" if result.snapshot.status.value == "complete" else "partial"
+        finish_pipeline_run(settings, parent_run_id, parent_status)
+        return result
     except Exception as exc:
-        set_stage(settings, parent_run_id, current_stage, "failed", error=exc)
+        set_stage(settings, parent_run_id, stage, "failed", error=exc)
         finish_pipeline_run(settings, parent_run_id, "failed", error=exc)
         raise
 
 
-def render_historical_report(
+def prepare_historical_report_inputs(
     settings: Settings,
     *,
     parent_run_id: UUID,
     config_path: Path | None = None,
-    allow_partial: bool | None = None,
-) -> FinalReportRunResult:
-    """Render exact persisted sources without rerunning either producer."""
+) -> ReportInputRunResult:
+    """Rebuild compact inputs from one exact persisted evidence parent."""
     apply_migrations(settings)
-    config = load_report_config(config_path=config_path)
-    partial_allowed = (
-        allow_partial if allow_partial is not None else config.config.report.allow_partial
-    )
     bundles = load_signal_bundles_for_parent(settings, parent_run_id)
-    required = {"ai_visibility", "scout"}
-    missing = sorted(required - set(bundles))
+    missing = sorted({"ai_visibility", "scout"} - set(bundles))
     if missing:
         raise RuntimeError(f"Historical source bundles are missing: {', '.join(missing)}")
     citation = bundles["ai_visibility"]
@@ -280,38 +160,11 @@ def render_historical_report(
         None,
     )
     citation_report = _citation_report_from_bundle(reference.json_path if reference else None)
-    report_week = _report_week(bundles["ai_visibility"], bundles["scout"])
-    recon_reporting = load_recon_reporting_payload(
+    return _build_and_write(
         settings,
-        client_id=bundles["ai_visibility"].client.client_id,
-        report_week=report_week,
-        history_weeks=config.profile_settings.history_weeks,
-    )
-    snapshot = build_final_report_snapshot(
         parent_run_id=parent_run_id,
         citation_report=citation_report,
         citation_bundle=citation,
         recon_bundle=bundles["scout"],
-        recon_reporting=recon_reporting,
-        config=config,
-    )
-    report_input = build_report_input(
-        snapshot,
-        prompt_sha256=client_report_prompt_sha256(),
-    )
-    shared_settings = AivcSettings()
-    narrative = (
-        StructuredLlmNarrative(shared_settings)
-        if config.config.report.narrative_mode == "structured_llm"
-        else ReuseValidatedNarrative()
-    )
-    snapshot = narrative.enrich(snapshot, report_input)
-    publishable = snapshot.status.value == "complete" or (
-        snapshot.status.value == "partial" and partial_allowed
-    )
-    return _write_persist_and_refresh(
-        settings,
-        snapshot,
-        report_input,
-        write_latest=config.config.report.write_latest_copies and publishable,
+        config_path=config_path,
     )
