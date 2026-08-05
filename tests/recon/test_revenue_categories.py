@@ -175,3 +175,50 @@ def test_modeled_scenario_with_incomplete_inputs_is_unavailable():
     )
     assert finding.category is R.RevenueCategory.unavailable
     assert finding.value_usd is None
+
+
+# ---------------------------------------------------------------------------
+# A zero is ambiguous — found by running the pipeline on real data.
+# ---------------------------------------------------------------------------
+
+_UNTRACKED_PROPERTY = [
+    {"landing_page": "/", "revenue": 0.0},
+    {"landing_page": "/revenue-operations-strategy", "revenue": 0.0},
+]
+_TRACKED_PROPERTY = [
+    {"landing_page": "/", "revenue": 0.0},
+    {"landing_page": "/checkout", "revenue": 1200.0},   # ecommerce demonstrably live
+]
+
+
+def test_zero_on_an_untracked_property_is_unavailable_not_recorded_zero():
+    """Regression from the first live run. The pilot's page matched GA4 rows that were all zero
+    because the property has no ecommerce tracking — and it graded `recorded: $0`, asserting a
+    measurement nobody made. "Earned nothing" and "never tracked" are the two facts this module
+    exists to keep apart."""
+    out = R.compute_cluster_revenue(
+        demand={"impressions": 270}, financials=_FINANCIALS,
+        sov={"client_sov_pp": 0.0, "primary_competitor_sov_pp": 0.0},
+        ga4=_UNTRACKED_PROPERTY, fx_rates={}, target_landing_pages={"/"},
+    )
+    assert out["revenue_category"] == "unavailable"
+    assert out["revenue_value_usd"] is None
+
+
+def test_zero_on_a_tracked_property_is_a_real_recorded_zero():
+    """Where the property demonstrably records revenue, a page earning nothing is a genuine
+    measurement and must not be hidden as unavailable."""
+    out = R.compute_cluster_revenue(
+        demand={"impressions": 270}, financials=_FINANCIALS,
+        sov={"client_sov_pp": 0.0, "primary_competitor_sov_pp": 0.0},
+        ga4=_TRACKED_PROPERTY, fx_rates={}, target_landing_pages={"/"},
+    )
+    assert out["revenue_category"] == "recorded"
+    assert out["revenue_value_usd"] == 0.0
+
+
+def test_property_revenue_tracking_detector():
+    assert not R._property_tracks_revenue([])
+    assert not R._property_tracks_revenue(_UNTRACKED_PROPERTY)
+    assert not R._property_tracks_revenue([{"revenue": None}, {"revenue": "n/a"}])
+    assert R._property_tracks_revenue(_TRACKED_PROPERTY)

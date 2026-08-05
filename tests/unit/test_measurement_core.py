@@ -293,3 +293,37 @@ def test_compare_windows_covers_the_full_gsc_metric_set():
         A.aggregate_gsc_rows(_ROWS), A.aggregate_gsc_rows(_ROWS)
     )}
     assert metrics == {"impressions", "clicks", "ctr_percent", "average_position"}
+
+
+# ---------------------------------------------------------------------------
+# GA4 on a shared property: separable or not?
+# ---------------------------------------------------------------------------
+
+def test_ga4_path_only_landing_pages_cannot_identify_a_client():
+    """GA4 stores landing_page as a path. On a shared property '/pricing' could belong to either
+    client, so there is nothing to scope by — the override cannot be honoured safely."""
+    from ai_visibility.measurement.ga4 import _has_host
+
+    assert not _has_host("/")
+    assert not _has_host("/insights")
+    assert not _has_host("/resources/ai-search-revenue-attribution")
+    assert _has_host("https://multiplierai.ai/insights")
+    assert _has_host("multiplierai.ai/insights")
+
+
+def test_ga4_engagement_rate_is_recomputed_from_totals():
+    """Same trap as CTR: a per-row average lets a 2-session page outweigh a 500-session one."""
+    rows = [
+        {"landing_page": "/a", "sessions": 500, "engaged_sessions": 100},
+        {"landing_page": "/b", "sessions": 2, "engaged_sessions": 2},
+    ]
+    totals = A.aggregate_ga4_rows(rows)
+    assert totals.sessions == 502
+    assert totals.engagement_rate_percent == pytest.approx(100.0 * 102 / 502)
+    assert totals.engagement_rate_percent < 25.0     # a flat mean would report ~60%
+
+
+def test_ga4_empty_window_reports_none_not_zero_rate():
+    totals = A.aggregate_ga4_rows([])
+    assert totals.sessions == 0
+    assert totals.engagement_rate_percent is None

@@ -146,6 +146,77 @@ def delta(name: str, baseline: object, follow_up: object, *, unit: str) -> dict[
     }
 
 
+@dataclass(frozen=True)
+class Ga4Totals:
+    """Aggregate GA4 engagement over one window."""
+
+    sessions: int
+    engaged_sessions: int
+    engagement_rate_percent: float | None
+    total_users: int
+    new_users: int
+    distinct_pages: int
+    row_count: int
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "sessions": self.sessions,
+            "engaged_sessions": self.engaged_sessions,
+            "engagement_rate_percent": self.engagement_rate_percent,
+            "total_users": self.total_users,
+            "new_users": self.new_users,
+            "distinct_pages": self.distinct_pages,
+            "row_count": self.row_count,
+        }
+
+
+def aggregate_ga4_rows(rows: Iterable[dict[str, Any]]) -> Ga4Totals:
+    """Total GA4 engagement rows for one window.
+
+    Engagement rate is recomputed from summed engaged sessions and sessions, never averaged across
+    rows — the same trap as CTR, where one low-traffic page would otherwise carry the same weight
+    as the page that matters."""
+    sessions = engaged = users = new_users = row_count = 0
+    pages: set[str] = set()
+
+    for row in rows or []:
+        row_count += 1
+        sessions += int(_number(row.get("sessions")) or 0)
+        engaged += int(_number(row.get("engaged_sessions")) or 0)
+        users += int(_number(row.get("total_users")) or 0)
+        new_users += int(_number(row.get("new_users")) or 0)
+        if row.get("landing_page"):
+            pages.add(str(row["landing_page"]))
+
+    return Ga4Totals(
+        sessions=sessions,
+        engaged_sessions=engaged,
+        engagement_rate_percent=(100.0 * engaged / sessions) if sessions > 0 else None,
+        total_users=users,
+        new_users=new_users,
+        distinct_pages=len(pages),
+        row_count=row_count,
+    )
+
+
+def compare_ga4_windows(baseline: Ga4Totals, follow_up: Ga4Totals) -> list[dict[str, Any]]:
+    """Engagement delta set. Conversions and revenue are deliberately absent — key events are not
+    configured on the observed properties, and reporting zeros would present an instrumentation
+    gap as a commercial finding."""
+    return [
+        delta("sessions", baseline.sessions, follow_up.sessions, unit=UNIT_COUNT),
+        delta(
+            "engaged_sessions", baseline.engaged_sessions, follow_up.engaged_sessions,
+            unit=UNIT_COUNT,
+        ),
+        delta(
+            "engagement_rate_percent", baseline.engagement_rate_percent,
+            follow_up.engagement_rate_percent, unit=UNIT_PERCENT,
+        ),
+        delta("total_users", baseline.total_users, follow_up.total_users, unit=UNIT_COUNT),
+    ]
+
+
 def compare_windows(baseline: GscTotals, follow_up: GscTotals) -> list[dict[str, Any]]:
     """Full GSC delta set for one measurement plan."""
     return [

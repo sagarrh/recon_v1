@@ -5,6 +5,7 @@ from typing import Any
 
 from ai_visibility.config.settings import Settings
 from ai_visibility.database.connection import connect
+from aivc.database.source_health import check_source_health, summarize_source_health
 
 TABLE_REQUIREMENTS: dict[str, frozenset[str]] = {
     "clients": frozenset(
@@ -278,6 +279,10 @@ def audit_shared_schema(settings: Settings) -> dict[str, Any]:
     required_sources_ready = all(
         item["present"] and item["required_columns_present"] for item in table_assessment.values()
     )
+    # Schema correctness and data arrival are different failures. A schema can be perfect while a
+    # source has silently stopped advancing, so `ready` covers structure and `source_health` covers
+    # movement — reported side by side rather than collapsed into one flag.
+    health = summarize_source_health(check_source_health(settings))
     return {
         "mode": "read_only",
         "ready": (
@@ -286,6 +291,7 @@ def audit_shared_schema(settings: Settings) -> dict[str, Any]:
             and not missing_unique_targets
             and cycle_live_mode_allowed
         ),
+        "source_health": health,
         "source_of_truth": "public.ai_monitoring",
         "tables": table_assessment,
         "column_types": column_types,

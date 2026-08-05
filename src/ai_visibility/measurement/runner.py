@@ -17,7 +17,15 @@ from uuid import UUID
 from ai_visibility.config.settings import Settings
 from ai_visibility.database.connection import connect
 from ai_visibility.measurement import aggregation as A
-from ai_visibility.measurement import gsc, mapping, outcomes, persistence, tenancy, windows
+from ai_visibility.measurement import (
+    ga4,
+    gsc,
+    mapping,
+    outcomes,
+    persistence,
+    tenancy,
+    windows,
+)
 
 
 @dataclass(frozen=True)
@@ -161,6 +169,50 @@ def _plan_one(
     )
 
 
+def _capture_ga4(
+    settings: Settings, scope: tenancy.TenantScope,
+    plan: persistence.StoredPlan, window: windows.MeasurementWindow,
+) -> list[dict[str, Any]]:
+    """Capture the GA4 engagement layer for a plan, and persist both window snapshots.
+
+    Returns [] when GA4 is unavailable for this client — refused as a shared property, not
+    connected, or with no target page that GA4 holds. An empty list is read downstream as
+    `unavailable`, never as zero engagement."""
+    if not scope.ga4_measurable or not plan.target_pages:
+        return []
+
+    source_pages = ga4.fetch_source_pages(
+        settings, scope, start=plan.baseline_start, end=plan.follow_up_end
+    )
+    mapped = mapping.map_targets(
+        target_queries=[], target_pages=plan.target_pages,
+        source_queries=[], source_pages=source_pages,
+        owned_page_check=ga4.owned_page_checker(scope),
+    )
+    if not mapped.matched_pages:
+        return []
+
+    totals = {}
+    for window_type, start, end in (
+        ("baseline", plan.baseline_start, plan.baseline_end),
+        ("follow_up", plan.follow_up_start, plan.follow_up_end),
+    ):
+        fetched = ga4.fetch_window(
+            settings, scope, start=start, end=end, matched_pages=mapped.matched_pages
+        )
+        aggregated = A.aggregate_ga4_rows(fetched.rows)
+        totals[window_type] = aggregated
+        persistence.upsert_snapshot(
+            settings, plan_id=plan.id, source="ga4", window_type=window_type,
+            requested_start=start, requested_end=end,
+            effective_start=fetched.effective_start, effective_end=fetched.effective_end,
+            fresh_through=window.fresh_through, row_count=aggregated.row_count,
+            metrics=aggregated.as_dict(), source_status=fetched.source_status,
+            warnings=fetched.warnings,
+        )
+    return A.compare_ga4_windows(totals["baseline"], totals["follow_up"])
+
+
 def plan_measurements(
     settings: Settings,
     *,
@@ -245,10 +297,12 @@ def evaluate_plans(
             source_status=baseline_fetch.source_status,
             warnings=baseline_fetch.warnings,
         )
+        ga4_deltas = _capture_ga4(settings, scope, plan, window)
         persistence.upsert_outcome(
             settings, plan_id=plan.id,
             classification=outcome.classification, confidence=outcome.confidence,
-            gsc_deltas=outcome.deltas, evidence_summary=outcome.evidence,
+            gsc_deltas=outcome.deltas, ga4_deltas=ga4_deltas,
+            evidence_summary=outcome.evidence,
             limitations=outcome.limitations, warnings=outcome.warnings,
             algorithm_version=outcome.algorithm_version,
         )

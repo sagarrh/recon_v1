@@ -15,7 +15,7 @@ from ai_visibility.database.validation import check_database
 from ai_visibility.measurement.persistence import load_outcome_summary
 from ai_visibility.measurement.runner import evaluate_plans, plan_measurements
 from aivc.config import get_aivc_settings
-from aivc.database import audit_shared_schema
+from aivc.database import audit_shared_schema, check_source_health, summarize_source_health
 from aivc.database.evidence import resolve_latest_evidence_parent
 from aivc.database.executions import (
     list_executions,
@@ -23,6 +23,7 @@ from aivc.database.executions import (
     record_execution,
     verify_execution,
 )
+from aivc.database.source_health import DEFAULT_MAX_LAG_DAYS
 from aivc.orchestration import (
     prepare_fresh_report_inputs,
     prepare_historical_report_inputs,
@@ -80,6 +81,29 @@ def db_check() -> None:
 def db_audit() -> None:
     """Read-only audit of citation and Recon tables, identity, and freshness."""
     _print(_run(lambda: audit_shared_schema(get_settings())))
+
+
+@db_app.command("health")
+def db_health(
+    max_lag_days: Annotated[
+        int,
+        typer.Option("--max-lag-days", help="Days a source may fall behind before it is stale."),
+    ] = DEFAULT_MAX_LAG_DAYS,
+) -> None:
+    """Check whether the mirrored sources are still actually arriving.
+
+    Separate from `db audit`, which checks structure. A schema can be perfect while a source has
+    silently stopped advancing — which is exactly how ai_monitoring reported success for months
+    while writing nothing. Exits non-zero when any source is unhealthy, so it can gate a cron."""
+
+    def action() -> dict[str, Any]:
+        sources = check_source_health(get_settings(), max_lag_days=max_lag_days)
+        return summarize_source_health(sources)
+
+    summary = _run(action)
+    _print(summary)
+    if not summary["healthy"]:
+        raise typer.Exit(code=1)
 
 
 @citations_app.command("generate")

@@ -203,19 +203,24 @@ def upsert_outcome(
     limitations: list[str],
     warnings: list[str],
     algorithm_version: str,
+    ga4_deltas: list[dict[str, Any]] | None = None,
 ) -> None:
-    """Store the conclusion. One outcome per plan; re-evaluating replaces it."""
+    """Store the conclusion. One outcome per plan; re-evaluating replaces it.
+
+    `ga4_deltas` empty means the engagement layer was unavailable for this client — refused,
+    unconnected, or unmapped. Downstream that reads as `unavailable`, never as zero engagement."""
     with connect(settings) as connection, connection.cursor() as cursor:
         cursor.execute(
             """
             insert into public.ai_visibility_measurement_outcomes(
-              plan_id, classification, confidence, gsc_deltas, evidence_summary,
+              plan_id, classification, confidence, gsc_deltas, ga4_deltas, evidence_summary,
               limitations, warnings, algorithm_version
-            ) values (%s,%s,%s,%s,%s,%s,%s,%s)
+            ) values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             on conflict (plan_id) do update set
               classification = excluded.classification,
               confidence = excluded.confidence,
               gsc_deltas = excluded.gsc_deltas,
+              ga4_deltas = excluded.ga4_deltas,
               evidence_summary = excluded.evidence_summary,
               limitations = excluded.limitations,
               warnings = excluded.warnings,
@@ -223,7 +228,7 @@ def upsert_outcome(
               evaluated_at = now()
             """,
             (
-                plan_id, classification, confidence, Jsonb(gsc_deltas),
+                plan_id, classification, confidence, Jsonb(gsc_deltas), Jsonb(ga4_deltas or []),
                 Jsonb(evidence_summary), Jsonb(limitations), Jsonb(warnings), algorithm_version,
             ),
         )

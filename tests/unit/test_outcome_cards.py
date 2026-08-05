@@ -33,12 +33,43 @@ def _row(**over):
 # ---------------------------------------------------------------------------
 
 def test_uninstrumented_layers_are_unavailable_not_zero():
+    """Commercial intent and revenue have no source at all; each must say WHY, not show 0."""
     card = OC.build_card(_row())
     by_name = {layer.name: layer for layer in card.layers}
-    for name in (OC.WEBSITE_ENGAGEMENT, OC.COMMERCIAL_INTENT, OC.REVENUE):
+    for name in (OC.COMMERCIAL_INTENT, OC.REVENUE):
         assert by_name[name].status == OC.UNAVAILABLE
-        assert by_name[name].detail                      # and it says WHY
-        assert "not connected" in by_name[name].detail or "no ecommerce" in by_name[name].detail
+        assert by_name[name].detail
+        assert "not configured" in by_name[name].detail or "no ecommerce" in by_name[name].detail
+
+
+_GA4_GROWTH = [
+    {"metric": "sessions", "direction": "improved", "absolute_delta": 120.0,
+     "relative_delta": 0.32},
+    {"metric": "engaged_sessions", "direction": "improved", "absolute_delta": 80.0,
+     "relative_delta": 0.28},
+]
+
+
+def test_engagement_layer_is_real_when_ga4_data_exists():
+    card = OC.build_card(_row(ga4_deltas=_GA4_GROWTH))
+    engagement = next(x for x in card.layers if x.name == OC.WEBSITE_ENGAGEMENT)
+    assert engagement.status == OC.IMPROVED
+    assert "sessions: +32%" in engagement.detail
+
+
+def test_engagement_layer_is_unavailable_when_ga4_is_refused_or_absent():
+    """Empty deltas mean GA4 could not be read — a shared property, no connection, or no matching
+    page. None of those is zero engagement, and reporting 0 would read as a failed intervention."""
+    card = OC.build_card(_row(ga4_deltas=[]))
+    engagement = next(x for x in card.layers if x.name == OC.WEBSITE_ENGAGEMENT)
+    assert engagement.status == OC.UNAVAILABLE
+    assert "shared without an override" in engagement.detail
+
+
+def test_three_evidenced_layers_improving_still_never_reaches_high_confidence():
+    card = OC.build_card(_row(ga4_deltas=_GA4_GROWTH))
+    assert card.assessment == "associated downstream growth"
+    assert card.confidence == "medium"       # not "high": still no control
 
 
 def test_every_layer_appears_even_when_unavailable():

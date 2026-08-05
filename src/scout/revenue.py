@@ -258,6 +258,21 @@ def modeled_value_scenario(*, impressions: float | None, client_ctr_pct: float |
 
 # ---- cluster-level assembly ----
 
+def _property_tracks_revenue(ga4_rows: list[dict]) -> bool:
+    """True when this GA4 property records revenue anywhere in the supplied window.
+
+    Distinguishes "this page earned nothing" from "this property has no ecommerce tracking". Both
+    present as a zero on the page, and reporting the second as `recorded: 0` would assert a
+    measurement that was never really made."""
+    for row in ga4_rows or []:
+        try:
+            if float(row.get("revenue") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def _scenario_for(demand: dict, financials: dict, sov: dict,
                   capture_fraction: float | None) -> RevenueFinding | None:
     """Build the internal modeled scenario, or None when it is disabled or its inputs are incomplete."""
@@ -308,6 +323,12 @@ def compute_cluster_revenue(*, demand: dict, financials: dict, sov: dict,
     page_revenue = (actual_revenue_from_ga4(ga4_rows=ga4_rows, landing_pages=pages,
                                             normalizer=normalizer)
                     if pages else None)
+    # A total of exactly zero is ambiguous: either the page genuinely earned nothing, or the
+    # property has no ecommerce tracking so every row defaults to 0. Those are the two facts this
+    # module exists to keep apart, and the revenue column alone cannot distinguish them. Only grade
+    # a zero as `recorded` when the property demonstrably tracks revenue somewhere.
+    if page_revenue == 0 and not _property_tracks_revenue(ga4_rows):
+        page_revenue = None
     linkage = LINKAGE_EXACT_PAGE if page_revenue is not None else LINKAGE_NONE
 
     scenario = _scenario_for(demand, financials, sov, capture_fraction)

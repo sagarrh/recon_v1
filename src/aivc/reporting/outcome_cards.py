@@ -50,8 +50,8 @@ UNAVAILABLE = "unavailable"
 # Layers with no source wired up yet. Named explicitly so the card says WHY, rather than leaving a
 # reader to guess whether the number was zero or simply never collected.
 NOT_YET_INSTRUMENTED = {
-    WEBSITE_ENGAGEMENT: "GA4 engagement is not connected for this client yet",
-    COMMERCIAL_INTENT: "GA4 key events are not connected for this client yet",
+    COMMERCIAL_INTENT: "GA4 key events are not configured on this property — three conversions "
+                       "in eight months, none attributable to a landing page",
     REVENUE: "no ecommerce revenue source connected; CRM is out of scope",
 }
 
@@ -178,12 +178,41 @@ def _explain(classification: str) -> str:
     }.get(classification, classification)
 
 
+def _engagement_layer(row: dict[str, Any]) -> FunnelLayer:
+    """Website engagement, from the GA4 measurement outcome.
+
+    Empty deltas mean GA4 was unavailable for this client — refused as a shared property, not
+    connected, or with no target page GA4 holds. That is `unavailable`, never zero engagement."""
+    deltas = list(row.get("ga4_deltas") or [])
+    if not deltas:
+        return FunnelLayer(
+            WEBSITE_ENGAGEMENT, UNAVAILABLE,
+            "GA4 engagement was not measurable for this recommendation — the property is "
+            "unconnected, shared without an override, or holds no matching landing page",
+        )
+    directions = {d.get("metric"): d.get("direction") for d in deltas}
+    status = _combine(
+        sum(1 for v in directions.values() if v == IMPROVED),
+        sum(1 for v in directions.values() if v == DECLINED),
+    )
+    parts = [
+        (
+            f"{d['metric']}: {d['relative_delta'] * 100:+.0f}%"
+            if d.get("relative_delta") is not None
+            else f"{d['metric']}: {d['absolute_delta']:+.1f}"
+        )
+        for d in deltas
+        if d.get("absolute_delta") is not None
+    ]
+    return FunnelLayer(WEBSITE_ENGAGEMENT, status, "; ".join(parts) or "no change", deltas)
+
+
 def build_card(row: dict[str, Any]) -> OutcomeCard:
     """Build one card from a joined execution + recon outcome + measurement outcome row."""
-    layers = [_visibility_layer(row), _search_layer(row)]
+    layers = [_visibility_layer(row), _search_layer(row), _engagement_layer(row)]
     layers.extend(
-        FunnelLayer(name, UNAVAILABLE, reason)
-        for name, reason in ((n, NOT_YET_INSTRUMENTED[n]) for n in LAYER_ORDER[2:])
+        FunnelLayer(name, UNAVAILABLE, NOT_YET_INSTRUMENTED[name])
+        for name in (COMMERCIAL_INTENT, REVENUE)
     )
 
     evidenced = [layer for layer in layers if layer.status != UNAVAILABLE]
@@ -237,6 +266,7 @@ _CARD_SQL = """
            measured.classification,
            measured.confidence                 as measurement_confidence,
            measured.gsc_deltas,
+           measured.ga4_deltas,
            measured.limitations
       from public.aivc_action_executions execution
       left join public.recommendations rec
