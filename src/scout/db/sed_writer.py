@@ -331,9 +331,10 @@ def _write_recommendations(sb, state: ScoutState, client_ids: dict[str, str], in
             "window_weeks": d.get("window_weeks"),
             "validation_status": d.get("validation_status", "ok"),
             "validation_notes": d.get("validation_notes") or [],
-            "revenue_opportunity_usd": d.get("revenue_opportunity_usd"),
-            "revenue_at_risk_usd": d.get("revenue_at_risk_usd"),
-            "revenue_basis": d.get("revenue_basis", "none"),
+            "revenue_category": d.get("revenue_category", "unavailable"),
+            "revenue_value_usd": d.get("revenue_value_usd"),
+            "revenue_currency": d.get("revenue_currency", "USD"),
+            "revenue_limitations": d.get("revenue_limitations") or [],
             "revenue_inputs": _to_jsonable(d.get("revenue_inputs")),
         })
     if not rows:
@@ -465,9 +466,8 @@ def _write_outcomes(sb, state: ScoutState, client_ids: dict[str, str], rec_id_ma
             "baseline_competitor_sov_pp": baseline_comp,
             "baseline_primary_competitor": comp,
             "baseline_snapshot_at": snapshot_at,
-            "baseline_revenue_usd": (d.get("revenue_inputs") or {}).get("revenue_usd"),
-            "revenue_at_risk_usd": d.get("revenue_at_risk_usd"),
-            "revenue_basis": d.get("revenue_basis", "none"),
+            "baseline_revenue_usd": d.get("revenue_value_usd"),
+            "baseline_revenue_category": d.get("revenue_category", "unavailable"),
         })
     if not rows:
         return 0

@@ -113,19 +113,25 @@ def _attributed_assets_line(rec, client_id) -> tuple[str, dict]:
         from scout.db import sed_mapping as m
         from scout.db.supabase_client import get_sed_client
         sb = get_sed_client()
+        # Only categories with an observable page-level link may total. `unavailable` rows carry NULL
+        # dollars by construction, and categories are never summed together.
         rows = (sb.table(m.SCOUT_ASSET_ATTRIBUTION_TABLE)
-                .select("attributed_revenue_usd,revenue_basis")
+                .select("attributed_revenue_usd,revenue_category")
                 .eq("client_id", str(client_id))
                 .eq("cluster_id", rec.cluster_id)
-                .in_("revenue_basis", ["actual", "hybrid"])
+                .in_("revenue_category", ["recorded", "influenced"])
                 .execute().data or [])
         rows = [r for r in rows if r.get("attributed_revenue_usd") is not None]
         if not rows:
             return "", {}
+        categories = {r.get("revenue_category") for r in rows}
+        if len(categories) > 1:
+            print("[report_gen] mixed revenue categories for cluster — not totalling")
+            return "", {}
+        category = categories.pop()
         total = sum(float(r["attributed_revenue_usd"]) for r in rows)
-        basis = "actual" if all(r.get("revenue_basis") == "actual" for r in rows) else "hybrid"
         line = (
-            f"\n\nASSET ATTRIBUTION (internal only): ${total:,.0f} [{basis}] attributed to this "
+            f"\n\nASSET ATTRIBUTION (internal only): ${total:,.0f} [{category}] attributed to this "
             f"cluster's assets across {len(rows)} measured window row(s) — correlational, "
             f"post-publish window, not proven causal. Do not quote to clients as earned revenue."
         )

@@ -190,12 +190,17 @@ def recommendation_generation(state: ScoutState) -> dict:
                     None,
                 ),
             }
+            # No structured target pages yet (Phase 1.3), so there is no page-level linkage and the
+            # category resolves to `unavailable` — correct, not a regression. Once recommendations
+            # carry validated target_pages, pass them here to earn `recorded`/`influenced`.
             rev = R.compute_cluster_revenue(
                 demand=demand, financials=fin or {}, sov=sov_for_rev,
                 ga4=bundle.get("ga4"), fx_rates=bundle.get("fx_rates"),
+                target_landing_pages=None,
+                capture_fraction=(cfg.modeled_scenario_capture_fraction
+                                  if cfg.modeled_scenario_enabled else None),
             )
-            verdict.revenue_at_risk_usd = rev["revenue_at_risk_usd"]
-            verdict.revenue_basis = rev["revenue_basis"]
+            verdict.revenue_category = rev["revenue_category"]
 
         _ground_events(trigger, get_config())
         use_deep = _use_deep(deep, verdict)
@@ -298,9 +303,10 @@ def _stamp_context(rec: Recommendation, cr, fin: dict | None, wc=None, rev: dict
     rec.competitor_ai_access = (getattr(wc, "ai_access", None) or {}) if wc else {}
     rec.slack_report = _normalize_slack_type(rec.slack_report, rec.type, rec.confidence)
     if rev is not None:
-        rec.revenue_at_risk_usd = rev.get("revenue_at_risk_usd")
-        rec.revenue_opportunity_usd = rev.get("revenue_opportunity_usd")
-        rec.revenue_basis = rev.get("revenue_basis", "none")
+        rec.revenue_category = rev.get("revenue_category", "unavailable")
+        rec.revenue_value_usd = rev.get("revenue_value_usd")
+        rec.revenue_currency = rev.get("revenue_currency", "USD")
+        rec.revenue_limitations = rev.get("revenue_limitations", [])
         rec.revenue_inputs = rev.get("revenue_inputs", {})
     return rec
 

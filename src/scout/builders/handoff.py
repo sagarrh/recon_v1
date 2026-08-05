@@ -46,14 +46,15 @@ def install_instructions(asset_class: str, target: str) -> str:
 
 
 def revenue_rationale_line(rec_or_brief: dict) -> str:
-    """Client-facing: confident, basis-tagged, never $0, never a data-gap disclosure."""
+    """Client-facing rationale for a not-yet-published asset.
+
+    Never quotes a dollar figure: nothing has been implemented or measured at hand-off time, so any
+    number here would be a projection. Measured revenue appears later, in the outcome card, only once
+    an execution has been recorded and a GA4 landing-page link exists."""
     d = rec_or_brief or {}
     cluster = d.get("cluster_label") or "this demand cluster"
-    usd = d.get("revenue_opportunity_usd")
-    basis = d.get("revenue_basis") or "none"
-    if usd is None or usd == 0 or basis == "none":
-        return f"Built to capture the revenue opportunity on {cluster} (value not yet quantified)."
-    return f"Built to capture the ${usd:,.0f} [{basis}] opportunity on {cluster}."
+    return (f"Built to improve visibility and qualified discovery on {cluster}. "
+            f"Impact is measured after implementation against equal before/after windows.")
 
 
 def create_handoff_package(assets: list[dict], recs: dict[str, dict], output_dir: str) -> dict:

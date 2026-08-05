@@ -76,6 +76,38 @@ def _decision_field(sb, run_id, cluster_id):
         return None
 
 
+def _measure_revenue(sb, outcome_row: dict) -> tuple[float | None, str]:
+    """Measured GA4 revenue for this recommendation's target landing pages, with its category.
+
+    Returns (None, 'unavailable') unless the recommendation carries mapped target pages: property-wide
+    GA4 revenue is not this recommendation's revenue. CRM is out of scope, so for clients without GA4
+    ecommerce data the honest answer here is permanently 'unavailable'."""
+    from scout.config import get_config
+    cfg = get_config()
+    if not (cfg.revenue_outcome_enabled and cfg.geo_ga4_enabled):
+        return None, "unavailable"
+
+    pages = {p for p in (outcome_row.get("target_pages") or []) if p}
+    if not pages:
+        return None, "unavailable"
+    try:
+        from scout import revenue as R
+        from scout.db import revenue_context as rvx
+        handles = rvx.get_client_revenue_handles(sb, outcome_row.get("client_id", ""))
+        ga4 = rvx.get_ga4_revenue(sb, handles.get("ga4_property_id", ""))
+        normalized = {rvx.normalize_url(p) for p in pages}
+        rev = R.actual_revenue_from_ga4(ga4_rows=ga4, landing_pages=normalized)
+        category = R.resolve_revenue_category(
+            page_scoped_revenue=rev,
+            linkage=R.LINKAGE_EXACT_PAGE if rev is not None else R.LINKAGE_NONE,
+        )
+        return rev, str(category)
+    except Exception as e:
+        log.warning("[outcome_measure] revenue measurement failed for %s: %s",
+                    outcome_row.get("recommendation_id"), e)
+        return None, "unavailable"
+
+
 def run_outcome_measurement(sb, today: date) -> int:
     """Measure SOV outcomes in place for every shipped recommendation whose timeline window has elapsed (deterministic, no LLM).
     Reads the FROZEN R1-5 baseline, computes current client-cluster SOV via load_data(), and upserts sov_delta_pp/recovered onto the existing scout_outcomes row."""
@@ -110,26 +142,7 @@ def run_outcome_measurement(sb, today: date) -> int:
         delta = (current - baseline) if (current is not None and baseline is not None) else None
         recovered = (delta >= 0) if delta is not None else None
 
-        rev_current, rev_basis = None, "none"
-        from scout.config import get_config
-        cfg = get_config()
-        if cfg.revenue_outcome_enabled:
-            try:
-                from scout import revenue as R
-                from scout.db import revenue_context as rvx
-                handles = rvx.get_client_revenue_handles(sb, r.get("client_id", ""))
-                ga4 = rvx.get_ga4_revenue(sb, handles.get("ga4_property_id", "")) if cfg.geo_ga4_enabled else []
-                attr = rvx.get_attribution_revenue(sb, r.get("client_id", ""), since=r.get("week_date")) if cfg.geo_crm_enabled else []
-                ga4_rev = R.actual_revenue_from_ga4(ga4_rows=ga4)
-                attr_rev = sum(float(a.get("revenue") or 0) for a in attr) if attr else None
-                rev_current = ga4_rev or attr_rev or None
-                rev_basis = R.resolve_basis(
-                    has_ga4_revenue=ga4_rev is not None,
-                    has_gsc_demand=False,
-                    has_modeled_inputs=False,
-                )
-            except Exception as e:
-                log.warning("[outcome_measure] revenue measurement failed for %s: %s", r.get("recommendation_id"), e)
+        rev_current, rev_category = _measure_revenue(sb, r)
 
         rev_delta = None
         if rev_current is not None and r.get("baseline_revenue_usd") is not None:
@@ -158,7 +171,7 @@ def run_outcome_measurement(sb, today: date) -> int:
             "measured_at": _now_iso(),
             "current_revenue_usd": rev_current,
             "revenue_delta_usd": rev_delta,
-            "revenue_basis": rev_basis,
+            "revenue_category": rev_category,
         })
 
     if not updates:

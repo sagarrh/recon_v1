@@ -30,10 +30,16 @@ class Recommendation(BaseModel):
     client_readiness: dict = Field(default_factory=dict)
     client_gaps: list[dict] = Field(default_factory=list)  # standing client-side GEO gap recommendations
     competitor_ai_access: dict = Field(default_factory=dict)
-    # Tier 1 — computed revenue (deterministic; persisted by sed_writer).
-    revenue_at_risk_usd: float | None = Field(None, ge=0)
-    revenue_opportunity_usd: float | None = Field(None, ge=0)
-    revenue_basis: str = Field("none", pattern="^(actual|modeled|hybrid|none)$")
+    # Revenue evidence (deterministic; persisted by sed_writer). `revenue_value_usd` is meaningless
+    # without `revenue_category` — never render or persist one without the other, and never add values
+    # across categories. `unavailable` is the honest default, not a failure state.
+    revenue_category: str = Field(
+        "unavailable",
+        pattern="^(recorded|influenced|incremental_estimate|modeled_scenario|unavailable)$",
+    )
+    revenue_value_usd: float | None = Field(None, ge=0)
+    revenue_currency: str = "USD"
+    revenue_limitations: list[str] = Field(default_factory=list)
     revenue_inputs: dict = Field(default_factory=dict)
     # Pre-publish validation gate (TFS-05): 'ok' | 'quarantined'; notes carry the reasons.
     validation_status: str = "ok"

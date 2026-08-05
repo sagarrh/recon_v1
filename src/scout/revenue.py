@@ -1,9 +1,54 @@
+# revenue.py — Evidence-graded revenue categories (pure, deterministic; the ONLY home for this arithmetic).
+# Purpose: Classify what kind of revenue evidence exists for a cluster/asset and carry its value with an
+#          explicit category, never a single undifferentiated dollar figure.
+# Scope: No SOV->dollar extrapolation. A category is earned by observable linkage, not by arithmetic.
+# Consumers: scout/nodes/recommendation_gen.py, scout/db/outcome_measure.py, scout/reports/asset_attribution.py.
+#
+# Categories (never summed across categories — see sum_within_category):
+#   recorded             GA4 purchase revenue on mapped, client-owned target landing pages.
+#   influenced           Recorded revenue linked to target pages/sessions, without a sole-causation claim.
+#   incremental_estimate Before/after movement adjusted by a control or seasonal baseline (Phase 5 only).
+#   modeled_scenario     Assumption-driven planning figure. NOT revenue. Internal-only by default.
+#   unavailable          Insufficient evidence for a defensible value. The honest default.
 import math
+from dataclasses import dataclass, field
+from enum import StrEnum
 
-from scout.config import get_config
 
-REVENUE_AI_REFERRAL_CAPTURE_FRACTION = 0.15
-_SOV_PP_TO_FRACTION = 0.01
+class RevenueCategory(StrEnum):
+    recorded = "recorded"
+    influenced = "influenced"
+    incremental_estimate = "incremental_estimate"
+    modeled_scenario = "modeled_scenario"
+    unavailable = "unavailable"
+
+
+# Categories that may appear in client-facing output. modeled_scenario is deliberately absent:
+# it is a planning assumption, and placing it beside measured revenue makes it read as a forecast.
+CLIENT_VISIBLE_CATEGORIES = frozenset({
+    RevenueCategory.recorded,
+    RevenueCategory.influenced,
+    RevenueCategory.incremental_estimate,
+})
+
+# How a target page was tied to the revenue rows. Only exact_page earns `recorded`.
+LINKAGE_EXACT_PAGE = "exact_page"
+LINKAGE_SESSION = "session_linked"
+LINKAGE_NONE = "insufficient_linkage"
+
+
+@dataclass(frozen=True)
+class RevenueFinding:
+    """One category-tagged revenue observation. `value_usd` is meaningless without `category`."""
+    category: RevenueCategory
+    value_usd: float | None
+    currency: str = "USD"
+    basis_reason: str = ""
+    limitations: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def is_client_visible(self) -> bool:
+        return self.category in CLIENT_VISIBLE_CATEGORIES
 
 
 def pct_to_fraction(value) -> float | None:
@@ -48,60 +93,78 @@ def normalize_currency(amount, from_currency: str, to_currency: str = "USD",
         return None
 
 
-def modeled_revenue_from_demand(*, impressions: float | None, client_ctr_pct: float | None,
-                                conversion_rate_pct: float | None, average_order_value: float | None,
-                                client_sov_share: float | None,
-                                capture_fraction: float = REVENUE_AI_REFERRAL_CAPTURE_FRACTION) -> dict | None:
-    ctr = pct_to_fraction(client_ctr_pct)
-    cr = pct_to_fraction(conversion_rate_pct)
-    cap = clamp_fraction(capture_fraction)
-    sov_frac = clamp_fraction((client_sov_share or 0) * _SOV_PP_TO_FRACTION) if client_sov_share is not None else None
-    try:
-        aov = float(average_order_value)
-    except (TypeError, ValueError):
-        aov = None
-    if any(v is None for v in (impressions, ctr, cr, cap, sov_frac, aov)):
-        return None
-    try:
-        imp = float(impressions)
-    except (TypeError, ValueError):
-        return None
-    if math.isnan(imp):
-        return None
-    expected_clicks = imp * ctr
-    ai_reachable_clicks = expected_clicks * cap
-    client_clicks = ai_reachable_clicks * sov_frac
-    conversions = client_clicks * cr
-    revenue = conversions * max(aov, 0.0)
-    return {
-        "expected_clicks": expected_clicks,
-        "ai_reachable_clicks": ai_reachable_clicks,
-        "client_clicks": client_clicks,
-        "conversions": conversions,
-        "revenue": revenue,
-        "inputs": {
-            "impressions": imp,
-            "estimated_ctr_pct": client_ctr_pct,
-            "conversion_rate_pct": conversion_rate_pct,
-            "average_order_value": aov,
-            "client_sov_pp": client_sov_share,
-            "capture_fraction": capture_fraction,
-        },
-    }
+# ---- category resolution ----
+
+def resolve_revenue_category(*, page_scoped_revenue: float | None, linkage: str,
+                             control_adjusted: bool = False,
+                             modeled_value: float | None = None) -> RevenueCategory:
+    """Grade the strongest revenue evidence available. Evidence, never arithmetic, decides the category.
+
+    A value with no observable page linkage is never `recorded` or `influenced`, regardless of how it was
+    computed. A modeled figure can only ever reach `modeled_scenario`."""
+    if page_scoped_revenue is not None and linkage in (LINKAGE_EXACT_PAGE, LINKAGE_SESSION):
+        if control_adjusted:
+            return RevenueCategory.incremental_estimate
+        return (RevenueCategory.recorded if linkage == LINKAGE_EXACT_PAGE
+                else RevenueCategory.influenced)
+    if modeled_value is not None:
+        return RevenueCategory.modeled_scenario
+    return RevenueCategory.unavailable
 
 
-def actual_revenue_from_ga4(*, ga4_rows: list[dict],
-                            landing_pages: set[str] | None = None) -> float | None:
+def unavailable(reason: str, *limitations: str) -> RevenueFinding:
+    """The honest default. Missing revenue is `unavailable`, never 0 and never a modeled substitute."""
+    return RevenueFinding(
+        category=RevenueCategory.unavailable,
+        value_usd=None,
+        basis_reason=reason,
+        limitations=tuple(limitations),
+    )
+
+
+def group_by_category(findings) -> dict[RevenueCategory, list[RevenueFinding]]:
+    out: dict[RevenueCategory, list[RevenueFinding]] = {}
+    for f in findings or []:
+        out.setdefault(f.category, []).append(f)
+    return out
+
+
+def sum_within_category(findings, category: RevenueCategory) -> float | None:
+    """Total the values of ONE category. This is the only summation API in this module, by design —
+    there is deliberately no cross-category total, because adding recorded revenue to a modeled
+    scenario produces a number that means nothing."""
+    values = [f.value_usd for f in (findings or [])
+              if f.category == category and f.value_usd is not None]
+    return sum(values) if values else None
+
+
+def client_visible(findings, *, modeled_scenario_visible: bool = False) -> list[RevenueFinding]:
+    """Filter to what may be shown to a client. modeled_scenario is excluded unless explicitly enabled."""
+    allowed = set(CLIENT_VISIBLE_CATEGORIES)
+    if modeled_scenario_visible:
+        allowed.add(RevenueCategory.modeled_scenario)
+    return [f for f in (findings or []) if f.category in allowed]
+
+
+# ---- measured revenue ----
+
+def actual_revenue_from_ga4(*, ga4_rows: list[dict], landing_pages: set[str]) -> float | None:
+    """Sum GA4 revenue for the given normalized landing pages ONLY.
+
+    `landing_pages` is required and must be non-empty: property-wide GA4 revenue is not this cluster's
+    revenue, and returning it here is how unrelated revenue used to acquire a cluster's label."""
     import logging
     _log = logging.getLogger(__name__)
+    if not landing_pages:
+        _log.warning("[revenue] GA4 revenue requested with no target landing pages — returning None")
+        return None
     total = 0.0
     count = 0
     skipped = 0
     for row in (ga4_rows or []):
-        if landing_pages is not None:
-            lp = row.get("landing_page") or ""
-            if lp not in landing_pages:
-                continue
+        lp = row.get("landing_page") or ""
+        if lp not in landing_pages:
+            continue
         rev = row.get("revenue")
         if rev is None:
             continue
@@ -116,8 +179,24 @@ def actual_revenue_from_ga4(*, ga4_rows: list[dict],
     return total if count > 0 else None
 
 
+def delta_revenue(*, baseline_revenue: float | None,
+                  current_revenue: float | None) -> float | None:
+    if baseline_revenue is None or current_revenue is None:
+        return None
+    try:
+        return float(current_revenue) - float(baseline_revenue)
+    except (TypeError, ValueError):
+        return None
+
+
+# ---- internal experimental model (NEVER client-facing) ----
+
 def revenue_at_risk(*, client_revenue: float | None, competitor_share: float | None,
                     client_share: float | None) -> float | None:
+    """EXPERIMENTAL, INTERNAL ONLY. Share-weighted split of the client's own measured revenue.
+
+    This is a competitive framing device, not a measurement. It must never be published to a client
+    and must never be presented as a revenue category. Retained for internal triage comparison only."""
     if any(v is None for v in (client_revenue, competitor_share, client_share)):
         return None
     try:
@@ -130,150 +209,134 @@ def revenue_at_risk(*, client_revenue: float | None, competitor_share: float | N
     return max(0.0, cr * cmp / denom)
 
 
-def revenue_opportunity(*, addressable_revenue: float | None,
-                        client_share: float | None) -> float | None:
-    if addressable_revenue is None or client_share is None:
-        return None
+def modeled_value_scenario(*, impressions: float | None, client_ctr_pct: float | None,
+                           conversion_rate_pct: float | None, average_order_value: float | None,
+                           client_sov_share: float | None,
+                           capture_fraction: float) -> RevenueFinding:
+    """A planning scenario, NOT revenue: impressions x CTR x capture x SOV x CR x AOV.
+
+    `capture_fraction` is an explicit assumption with no defensible empirical basis and must be passed
+    in deliberately. Every chained coefficient widens the error, so the result can only ever be
+    `modeled_scenario` and its assumptions travel with it in `limitations`."""
+    ctr = pct_to_fraction(client_ctr_pct)
+    cr = pct_to_fraction(conversion_rate_pct)
+    cap = clamp_fraction(capture_fraction)
+    sov_frac = clamp_fraction((client_sov_share or 0) * 0.01) if client_sov_share is not None else None
     try:
-        ar, cs = float(addressable_revenue), float(client_share)
+        aov = float(average_order_value)
     except (TypeError, ValueError):
-        return None
-    return max(0.0, ar * (1.0 - max(0.0, min(1.0, cs))))
-
-
-def delta_revenue(*, baseline_revenue: float | None,
-                  current_revenue: float | None) -> float | None:
-    if baseline_revenue is None or current_revenue is None:
-        return None
+        aov = None
+    if any(v is None for v in (impressions, ctr, cr, cap, sov_frac, aov)):
+        return unavailable("modeled scenario inputs incomplete")
     try:
-        return float(current_revenue) - float(baseline_revenue)
+        imp = float(impressions)
     except (TypeError, ValueError):
+        return unavailable("modeled scenario impressions not numeric")
+    if math.isnan(imp):
+        return unavailable("modeled scenario impressions not numeric")
+    value = imp * ctr * cap * sov_frac * cr * max(aov, 0.0)
+    return RevenueFinding(
+        category=RevenueCategory.modeled_scenario,
+        value_usd=value,
+        basis_reason="modeled: impressions x ctr x capture x sov x conversion x aov",
+        limitations=(
+            f"assumed AI capture fraction {cap}",
+            "SOV is not traffic share",
+            "traffic share is not conversion share",
+            "not measured revenue",
+        ),
+    )
+
+
+# ---- cluster-level assembly ----
+
+def _scenario_for(demand: dict, financials: dict, sov: dict,
+                  capture_fraction: float | None) -> RevenueFinding | None:
+    """Build the internal modeled scenario, or None when it is disabled or its inputs are incomplete."""
+    if capture_fraction is None:
         return None
+    scenario = modeled_value_scenario(
+        impressions=demand.get("impressions"),
+        client_ctr_pct=financials.get("estimated_ctr"),
+        conversion_rate_pct=financials.get("conversion_rate"),
+        average_order_value=financials.get("average_order_value"),
+        client_sov_share=sov.get("client_sov_pp"),
+        capture_fraction=capture_fraction,
+    )
+    return scenario if scenario.category is RevenueCategory.modeled_scenario else None
 
 
-def resolve_basis(*, has_ga4_revenue: bool, has_gsc_demand: bool,
-                  has_modeled_inputs: bool) -> str:
-    if has_ga4_revenue and has_gsc_demand:
-        return "actual"
-    if has_ga4_revenue or has_gsc_demand:
-        return "hybrid" if has_modeled_inputs else "actual"
-    if has_modeled_inputs:
-        return "modeled"
-    return "none"
+def _graded_value(category: RevenueCategory, *, page_revenue: float | None, pages: set[str],
+                  currency: str, fx_rates: dict | None,
+                  scenario: RevenueFinding | None) -> tuple[float | None, tuple[str, ...], str]:
+    """Resolve (value_usd, limitations, basis_reason) for an already-graded category."""
+    if category in (RevenueCategory.recorded, RevenueCategory.influenced):
+        converted = normalize_currency(page_revenue, currency, "USD", fx_rates)
+        if converted is None:
+            return (page_revenue,
+                    (f"revenue in {currency} could not be converted to USD",),
+                    f"GA4 purchase revenue on {len(pages)} mapped target page(s)")
+        return (converted, (), f"GA4 purchase revenue on {len(pages)} mapped target page(s)")
+    if category is RevenueCategory.modeled_scenario and scenario is not None:
+        return (scenario.value_usd, scenario.limitations, scenario.basis_reason)
+    return (None, (), "no measured revenue linkage for this cluster")
 
 
 def compute_cluster_revenue(*, demand: dict, financials: dict, sov: dict,
-                            ga4: dict | None, fx_rates: dict | None) -> dict:
-    cfg = get_config()
-    capture = cfg.revenue_ai_referral_capture_fraction
-    coeff_version = cfg.revenue_coefficient_version
+                            ga4: dict | list | None, fx_rates: dict | None,
+                            target_landing_pages: set[str] | None = None,
+                            capture_fraction: float | None = None) -> dict:
+    """Grade the revenue evidence for one cluster. Returns a category, never an 'opportunity'.
 
-    impressions = demand.get("impressions")
-    aov = financials.get("average_order_value")
-    cr_pct = financials.get("conversion_rate")
-    ctr_pct = financials.get("estimated_ctr")
+    Measured GA4 revenue is scoped to `target_landing_pages`; with no mapped pages there is no linkage
+    and the result is `unavailable`, optionally accompanied by an internal modeled scenario."""
     currency = financials.get("currency", "USD")
-    client_sov_pp = sov.get("client_sov_pp")
-    comp_sov_pp = sov.get("primary_competitor_sov_pp")
+    pages = target_landing_pages or set()
 
-    has_modeled = all(v is not None and v != 0 for v in (aov, cr_pct, ctr_pct))
-    has_ga4 = bool(ga4) and any(r.get("revenue") is not None for r in (ga4 if isinstance(ga4, list) else []))
-    has_gsc = impressions is not None
+    ga4_rows = ga4 if isinstance(ga4, list) else []
+    page_revenue = (actual_revenue_from_ga4(ga4_rows=ga4_rows, landing_pages=pages)
+                    if pages else None)
+    linkage = LINKAGE_EXACT_PAGE if page_revenue is not None else LINKAGE_NONE
 
-    ga4_rev = None
-    if has_ga4 and isinstance(ga4, list):
-        ga4_rev = actual_revenue_from_ga4(ga4_rows=ga4)
-
-    modeled = modeled_revenue_from_demand(
-        impressions=impressions,
-        client_ctr_pct=ctr_pct,
-        conversion_rate_pct=cr_pct,
-        average_order_value=aov,
-        client_sov_share=client_sov_pp,
-        capture_fraction=capture,
+    scenario = _scenario_for(demand, financials, sov, capture_fraction)
+    category = resolve_revenue_category(
+        page_scoped_revenue=page_revenue,
+        linkage=linkage,
+        modeled_value=scenario.value_usd if scenario else None,
+    )
+    value_usd, limitations, basis_reason = _graded_value(
+        category, page_revenue=page_revenue, pages=pages, currency=currency,
+        fx_rates=fx_rates, scenario=scenario,
     )
 
-    client_rev = ga4_rev if ga4_rev is not None else (modeled["revenue"] if modeled else None)
-
-    basis = resolve_basis(has_ga4_revenue=has_ga4, has_gsc_demand=has_gsc, has_modeled_inputs=has_modeled)
-
-    if client_rev is None or client_rev == 0:
-        return {
-            "revenue_at_risk_usd": None,
-            "revenue_opportunity_usd": None,
-            "revenue_basis": "none" if client_rev is None else basis,
-            "revenue_inputs": {
-                "basis_reason": "insufficient inputs" if client_rev is None else "zero revenue",
-                "coefficient_version": coeff_version,
-                "capture_fraction": capture,
-            },
-        }
-
-    client_share_frac = clamp_fraction((client_sov_pp or 0) * _SOV_PP_TO_FRACTION)
-    comp_share_frac = clamp_fraction((comp_sov_pp or 0) * _SOV_PP_TO_FRACTION)
-
-    rev_usd = normalize_currency(client_rev, currency, "USD", fx_rates)
-    if rev_usd is None and (currency or "USD").upper() != "USD":
-        basis = "hybrid" if basis == "actual" else basis
-    rev_usd = rev_usd if rev_usd is not None else client_rev
-
-    if client_share_frac and client_share_frac > 0:
-        addressable = rev_usd / client_share_frac
-    else:
-        addressable = rev_usd
-
+    # Internal-only competitive framing; never surfaced as a category.
     at_risk = revenue_at_risk(
-        client_revenue=rev_usd,
-        competitor_share=comp_share_frac,
-        client_share=client_share_frac,
+        client_revenue=value_usd if category is not RevenueCategory.modeled_scenario else None,
+        competitor_share=clamp_fraction((sov.get("primary_competitor_sov_pp") or 0) * 0.01),
+        client_share=clamp_fraction((sov.get("client_sov_pp") or 0) * 0.01),
     )
-    opp = revenue_opportunity(addressable_revenue=addressable, client_share=client_share_frac or 0)
-
-    inputs = {
-        "basis_reason": f"{basis}: " + ("GA4 actuals" if has_ga4 else "modeled AOV*CR") + (", GSC demand" if has_gsc else ", no GSC"),
-        "coefficient_version": coeff_version,
-        "capture_fraction": capture,
-        "estimated_ctr_pct": ctr_pct,
-        "conversion_rate_pct": cr_pct,
-        "average_order_value": aov,
-        "currency": currency,
-        "impressions": impressions,
-        "client_sov_pp": client_sov_pp,
-        "primary_competitor_sov_pp": comp_sov_pp,
-        "ga4_revenue_actual": ga4_rev,
-        "revenue_client_currency": client_rev,
-        "revenue_usd": rev_usd,
-        "fx_rate": (fx_rates or {}).get(((currency or "USD").upper(), "USD")),
-    }
-    if modeled:
-        inputs.update({
-            "expected_clicks": modeled["expected_clicks"],
-            "ai_reachable_clicks": modeled["ai_reachable_clicks"],
-            "client_clicks": modeled["client_clicks"],
-            "conversions": modeled["conversions"],
-        })
 
     return {
-        "revenue_at_risk_usd": at_risk,
-        "revenue_opportunity_usd": opp,
-        "revenue_basis": basis,
-        "revenue_inputs": inputs,
+        "revenue_category": str(category),
+        "revenue_value_usd": value_usd,
+        "revenue_currency": currency,
+        "revenue_limitations": list(limitations),
+        "revenue_at_risk_usd_internal": at_risk,
+        "revenue_inputs": {
+            "basis_reason": basis_reason,
+            "linkage": linkage,
+            "target_page_count": len(pages),
+            "ga4_page_revenue": page_revenue,
+            "impressions": demand.get("impressions"),
+            "client_sov_pp": sov.get("client_sov_pp"),
+            "primary_competitor_sov_pp": sov.get("primary_competitor_sov_pp"),
+            "currency": currency,
+            "fx_rate": (fx_rates or {}).get(((currency or "USD").upper(), "USD")),
+        },
     }
 
 
-# ---- Tier 2: per-asset attribution math (pure, deterministic; the ONLY home for this arithmetic) ----
-
-def lag_penalty(days_lag, *, max_days: int = 90, floor: float = 0.4) -> float:
-    try:
-        d = float(days_lag)
-    except (TypeError, ValueError):
-        return 1.0
-    if d <= 0:
-        return 1.0
-    if d >= max_days:
-        return floor
-    return 1.0 - (1.0 - floor) * (d / max_days)
-
+# ---- per-asset attribution scoring (pure, deterministic) ----
 
 def coverage_score(attributed, total) -> float | None:
     if attributed is None or total is None:
@@ -295,37 +358,3 @@ def confidence_score(*, channel_weight: float, coverage, lag: float,
     if is_modeled:
         raw *= modeled_discount
     return max(0.0, min(1.0, raw))
-
-
-def allocate_cluster_revenue(total_usd, eligible_asset_ids: list[str],
-                             page_attributed: dict[str, float]) -> dict[str, dict]:
-    """Deterministic cluster-level allocation (PRD §6 / PLAN §3.4, v1 rule).
-    Page-level actuals pass through unclamped (channel actuals are never rewritten to fit the
-    Tier-1 total); the remaining pool = max(total - sum(max(page, 0)), 0) goes to the single
-    eligible (published) asset when there is exactly one, else equal split. Returns
-    {asset_id: {"usd": float, "basis_reason": str}}."""
-    out: dict[str, dict] = {}
-    page_sum = 0.0
-    for aid, usd in (page_attributed or {}).items():
-        try:
-            val = float(usd)
-        except (TypeError, ValueError):
-            continue
-        out[aid] = {"usd": val, "basis_reason": "page_level_actual"}
-        page_sum += max(val, 0.0)
-    try:
-        total = float(total_usd)
-    except (TypeError, ValueError):
-        total = 0.0
-    pool = max(total - page_sum, 0.0)
-    eligible = [aid for aid in (eligible_asset_ids or []) if aid not in out]
-    if not eligible:
-        return out
-    if len(eligible) == 1:
-        out[eligible[0]] = {"usd": pool, "basis_reason": "dominant_published_asset"}
-        return out
-    share = pool / len(eligible)
-    reason = f"equal_split_{len(eligible)}_assets"
-    for aid in eligible:
-        out[aid] = {"usd": share, "basis_reason": reason}
-    return out

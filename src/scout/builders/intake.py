@@ -31,7 +31,7 @@ def fetch_recs_by_id(sb, rec_ids: list[str]) -> dict[str, dict]:
         try:
             resp = (sb.table(m.SCOUT_RECOMMENDATIONS_TABLE)
                     .select("id,client_name,cluster_label,priority,validation_status,"
-                            "revenue_opportunity_usd,revenue_at_risk_usd,revenue_basis")
+                            "revenue_category,revenue_value_usd")
                     .in_("id", chunk).execute())
             for r in (resp.data or []):
                 out[r.get("id")] = r
@@ -101,8 +101,8 @@ def briefs_from_targets(targets: list[dict], recs: dict[str, dict],
                 "asset_class": cls,
                 "target": tgt,
                 "seed_signals": source,
-                "revenue_opportunity_usd": recommendation.get("revenue_opportunity_usd"),
-                "revenue_basis": recommendation.get("revenue_basis") or "none",
+                "revenue_category": recommendation.get("revenue_category") or "unavailable",
+                "revenue_value_usd": recommendation.get("revenue_value_usd"),
                 "status": "drafted",
                 "run_id": target.get("run_id"),
             })

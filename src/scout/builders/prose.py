@@ -32,8 +32,7 @@ def asset_number_allowlist(rec_row: dict, facts: dict) -> set[str]:
         return build_number_allowlist(
             verdict, {}, {}, {}, {}, [],
             revenue_context=facts or {},
-            revenue_figures={k: (rec_row or {}).get(k) for k in
-                             ("revenue_opportunity_usd", "revenue_at_risk_usd")},
+            revenue_figures={k: (rec_row or {}).get(k) for k in ("revenue_value_usd",)},
         )
     except Exception as e:
         log.warning("[prose] allowlist build failed: %s", e)

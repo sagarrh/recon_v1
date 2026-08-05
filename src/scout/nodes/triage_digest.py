@@ -7,8 +7,11 @@ _RANK = {"CRITICAL": 0, "ELEVATED": 1, "WIN": 2, "WATCH": 3, "NOISE": 4, "": 5}
 
 
 def build_triage_digest(verdicts) -> list[dict]:
-    """Return one digest row per verdict, sorted by severity then revenue_at_risk_usd desc within tier.
-    None revenue sorts last so unmeasured clusters don't jump ahead of measured ones."""
+    """Return one digest row per verdict, sorted by severity then competitive movement within tier.
+
+    Ordering is deliberately not revenue-driven: a dollar figure derived from SOV ranked clusters by how
+    small their SOV was, not by how commercially important they were. Until the commercial priority
+    score lands, severity plus the size of the primary competitor's move is the honest ordering."""
     rows = []
     for v in verdicts:
         primary_delta = next(
@@ -23,9 +26,8 @@ def build_triage_digest(verdicts) -> list[dict]:
             "delta_client_pp": v.delta_client,
             "severity": v.triage_severity or "NOISE",
             "noise": bool(v.noise),
-            "revenue_at_risk_usd": getattr(v, "revenue_at_risk_usd", None),
-            "revenue_basis": getattr(v, "revenue_basis", "none"),
+            "revenue_category": getattr(v, "revenue_category", "unavailable"),
         })
     rows.sort(key=lambda r: (_RANK.get(r["severity"], 5),
-                             -(r["revenue_at_risk_usd"] or -1)))
+                             -abs(r["primary_delta_pp"] or 0.0)))
     return rows

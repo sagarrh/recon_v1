@@ -64,9 +64,11 @@ class ClusterVerdict(BaseModel):
     investigation_priority: str = "standard"
     noise: bool = False                    # set by TFS-09 noise floor
     graduation_regime: str = "news_mode"   # R4-3: regime of the primary trigger — news_mode|graduated
-    # Tier 1 — revenue stamped in memory by recommendation_gen (not by field_resolution).
-    revenue_at_risk_usd: float | None = Field(None, ge=0)
-    revenue_basis: str = Field("none", pattern="^(actual|modeled|hybrid|none)$")
+    # Revenue evidence stamped in memory by recommendation_gen (not by field_resolution).
+    revenue_category: str = Field(
+        "unavailable",
+        pattern="^(recorded|influenced|incremental_estimate|modeled_scenario|unavailable)$",
+    )
 
 
 class CycleSummary(BaseModel):

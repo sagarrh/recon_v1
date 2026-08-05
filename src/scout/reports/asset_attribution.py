@@ -1,10 +1,11 @@
 # asset_attribution.py — Tier 2: deterministic asset<->revenue join (correlation only, no LLM).
-# Purpose: Pair each scout_assets row with revenue via three channels (GA4 landing-page delta,
-#          attribution_events client-level, selection_events AI-channel) + the Tier-1 modeled-share fallback.
-# Scope: Read + join orchestration ONLY — every score/allocation is computed in scout/revenue.py (LOCKED),
-#        every URL/cluster mapping in scout/db/revenue_context.py. Writes go through scout/db/asset_writer.py.
+# Purpose: Pair a scout_assets row with revenue ONLY where an observable link exists — today that is an
+#          exact GA4 landing-page match. Every other asset is recorded as insufficient_linkage.
+# Scope: Read + join orchestration ONLY — every score is computed in scout/revenue.py, every URL/cluster
+#        mapping in scout/db/revenue_context.py. Writes go through scout/db/asset_writer.py.
+# Non-goal: allocating a cluster revenue pool across assets. An equal split (or a winner-takes-all split
+#        to the single published asset) is deterministic but commercially meaningless, so it is not done.
 # Consumers: scripts/asset_attribution_report.py (CLI), scripts/weekly_run.py (run_asset_attribution).
-import contextlib
 import logging
 from datetime import date, timedelta
 
@@ -17,11 +18,8 @@ from scout.utils import parse_date as _parse_date
 log = logging.getLogger(__name__)
 
 ASSET_ATTRIBUTION_BASIS = {
-    "ga4_landing_page":   "correlation (page-level GA4 revenue delta)",
-    "attribution_events": "correlation (client-level converted revenue, not page-level)",
-    "selection_events":   "correlation (AI-channel query->cluster)",
-    "tier1_modeled":      "correlation (Tier-1 modeled opportunity share, not measured)",
-    "none":               "no revenue basis (GA4/GSC/CRM absent for this client)",
+    "ga4_landing_page":     "correlation (exact page-level GA4 revenue delta)",
+    "insufficient_linkage": "no observable link between this asset and any revenue row",
 }
 
 
@@ -52,21 +50,6 @@ def _fetch_measured_outcomes(sb, client_id=None, since=None) -> list[dict]:
         return []
 
 
-def _fetch_recs(sb, rec_ids: list[str]) -> dict[str, dict]:
-    out: dict[str, dict] = {}
-    for i in range(0, len(rec_ids), 100):
-        chunk = rec_ids[i: i + 100]
-        try:
-            resp = (sb.table(m.SCOUT_RECOMMENDATIONS_TABLE)
-                    .select("id,client_name,cluster_label,revenue_basis,revenue_opportunity_usd,revenue_at_risk_usd")
-                    .in_("id", chunk).execute())
-            for r in (resp.data or []):
-                out[r.get("id")] = r
-        except Exception as e:
-            log.warning("[asset_attribution] recommendations fetch failed: %s", e)
-    return out
-
-
 def _fetch_selection_events(sb, client_id: str) -> list[dict]:
     try:
         return (sb.table(m.SELECTION_EVENTS_TABLE)
@@ -89,10 +72,6 @@ def _fetch_registry(sb, client_id: str) -> dict:
 def _fetch_ga4_rows(sb, client_id: str, weeks: int = 26) -> list[dict]:
     handles = rvx.get_client_revenue_handles(sb, client_id)
     return rvx.get_ga4_revenue(sb, handles.get("ga4_property_id") or "", weeks=weeks)
-
-
-def _fetch_attribution_events(sb, client_id: str, since=None) -> list[dict]:
-    return rvx.get_attribution_revenue(sb, client_id, since=since)
 
 
 # ---- channel computations (pure over fetched rows; math delegated to scout.revenue) ----
@@ -130,15 +109,17 @@ def _ga4_page_delta(ga4_rows, content_url, window_start: date, window_end: date,
             "matched_rows": cur_n + base_n}
 
 
-def _row(asset, source, basis, usd, window_start, window_end, coverage, confidence, inputs):
+def _row(asset, source, category, usd, window_start, window_end, coverage, confidence, inputs):
     return {
         "scout_asset_id": asset.get("id"),
         "recommendation_id": asset.get("recommendation_id"),
         "client_id": asset.get("client_id"),
         "cluster_id": asset.get("cluster_id"),
         "revenue_source": source,
-        "revenue_basis": basis,
-        "attribution_basis": ASSET_ATTRIBUTION_BASIS[source if basis != "none" else "none"],
+        "revenue_category": str(category),
+        "attribution_status": ("attributed" if source == "ga4_landing_page"
+                               else R.LINKAGE_NONE),
+        "attribution_basis": ASSET_ATTRIBUTION_BASIS[source],
         "attributed_revenue_usd": usd,
         "currency_code": "USD",
         "window_start": str(window_start) if window_start else None,
@@ -152,30 +133,123 @@ def _row(asset, source, basis, usd, window_start, window_end, coverage, confiden
     }
 
 
-def _opportunity_usd(rec_meta: dict):
-    """Opportunity-side dollar for a rec: offensive opportunity first, defensive at-risk fallback."""
-    opp = rec_meta.get("revenue_opportunity_usd")
-    return opp if opp is not None else rec_meta.get("revenue_at_risk_usd")
+def _unlinked_row(asset, reason, window_start, window_end, extra=None):
+    """An asset with no observable revenue link. Dollars stay NULL — never 0, never an allocated share."""
+    inputs = {"basis_reason": reason}
+    if extra:
+        inputs.update(extra)
+    return _row(asset, "insufficient_linkage", R.RevenueCategory.unavailable, None,
+                window_start, window_end, None, None, inputs)
 
 
 def _realized_usd(outcome: dict):
-    """Realized-side dollar (D7): revenue protected when a defensive rec recovered, else the measured delta."""
+    """Measured revenue delta for the outcome window, used only as a coverage denominator."""
     if not outcome:
         return None
-    if outcome.get("recovered") and outcome.get("revenue_at_risk_usd") is not None:
-        return outcome.get("revenue_at_risk_usd")
     return outcome.get("revenue_delta_usd")
 
 
+def _cluster_ai_channel_revenue(sel_rows, registry, cluster_id) -> dict:
+    """AI-channel revenue observed for this cluster's queries. Recorded as context only.
+
+    It maps a query to a cluster, never an event to an asset, so it can never license an asset-level
+    dollar. Kept so the evidence is visible rather than silently dropped."""
+    total, count, no_rev = 0.0, 0, 0
+    for ev in sel_rows or []:
+        if not ev.get("was_selected"):
+            continue
+        if rvx.cluster_for_query(registry, ev.get("query_text") or "") != cluster_id:
+            continue
+        rev = ev.get("revenue_attributed")
+        if rev is None:
+            no_rev += 1
+            continue
+        try:
+            total += float(rev)
+            count += 1
+        except (TypeError, ValueError):
+            no_rev += 1
+    if count == 0 and no_rev == 0:
+        return {}
+    return {
+        "cluster_ai_channel_revenue_observed": total if count else None,
+        "cluster_ai_channel_event_count": count,
+        "cluster_ai_channel_events_without_revenue": no_rev,
+        "cluster_ai_channel_note": "observed at cluster level; not linkable to this asset",
+    }
+
+
+def _attributed_rows(active, ga4_rows, *, w_start, w_end, w_weeks, realized, weights, cfg):
+    """Channel A — exact GA4 landing-page revenue delta. The only asset-level linkage we accept."""
+    rows: list[dict] = []
+    linked: set[str] = set()
+    if not (ga4_rows and w_start and w_end):
+        return rows, linked
+    for a in active:
+        if not a.get("content_url"):
+            continue
+        d = _ga4_page_delta(ga4_rows, a["content_url"], w_start, w_end, w_weeks)
+        if d is None:
+            continue
+        cov = R.coverage_score(d["delta"], realized)
+        conf = R.confidence_score(channel_weight=weights.get("ga4_landing_page", 1.0),
+                                  coverage=cov, lag=1.0, is_modeled=False,
+                                  modeled_discount=cfg.asset_modeled_discount)
+        rows.append(_row(a, "ga4_landing_page", R.RevenueCategory.recorded, d["delta"],
+                         w_start, w_end, cov, conf, {
+                             "basis_reason": "ga4_landing_page_window_delta",
+                             "current_window_revenue": d["current"],
+                             "baseline_window_revenue": d["baseline"],
+                             "matched_ga4_rows": d["matched_rows"],
+                             "normalized_url": rvx.normalize_url(a["content_url"]),
+                         }))
+        linked.add(a["id"])
+    return rows, linked
+
+
+def _group_by(rows, key: str) -> dict:
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r.get(key), []).append(r)
+    return out
+
+
+def _latest_outcome_by_cluster(outcomes) -> dict[tuple, dict]:
+    """Newest measured outcome per (client, cluster) — it defines the measurement window."""
+    out: dict[tuple, dict] = {}
+    for o in outcomes:
+        key = (o.get("client_id"), o.get("cluster_id"))
+        prev = out.get(key)
+        if prev is None or str(o.get("week_date") or "") > str(prev.get("week_date") or ""):
+            out[key] = o
+    return out
+
+
+def _cluster_records(cluster_assets, *, outcome, ga4_rows, ai_channel, weights, cfg) -> list[dict]:
+    """Attribution rows for one cluster: exact GA4 page matches earn dollars, everything else does not."""
+    w_start = _parse_date((outcome or {}).get("week_date"))
+    w_end = _parse_date((outcome or {}).get("window_elapsed_at"))
+    w_weeks = int((outcome or {}).get("window_weeks") or 6)
+
+    linked_rows, linked_ids = _attributed_rows(
+        cluster_assets, ga4_rows, w_start=w_start, w_end=w_end, w_weeks=w_weeks,
+        realized=_realized_usd(outcome), weights=weights, cfg=cfg,
+    )
+    reason = ("no ga4 landing-page match for this asset" if ga4_rows and w_start
+              else "no measured outcome window or no ga4 rows for this client")
+    unlinked = [_unlinked_row(a, reason, w_start, w_end, ai_channel)
+                for a in cluster_assets if a["id"] not in linked_ids]
+    return linked_rows + unlinked
+
+
 def build_asset_attribution(sb, client_id=None, since=None) -> list[dict]:
-    """One honesty-tagged attribution row per (asset, channel, window). Correlation only, never causation.
-    Basis waterfall per cluster: GA4 page actual > attribution_events client actual > selection_events
-    AI-channel actual > tier1_modeled opportunity share > none (NULL dollars). Cluster pools allocate to
-    published assets only (D8); every asset ends with >=1 row so coverage KPIs have a denominator."""
+    """One honesty-tagged attribution row per (asset, window). Correlation only, never causation.
+
+    An asset earns a dollar only through an observable link — currently an exact GA4 landing-page match.
+    Every other asset gets an insufficient_linkage row with NULL dollars, so coverage KPIs keep a
+    denominator without inventing attribution. Cluster revenue is never split across assets."""
     cfg = get_config()
     assets = _fetch_assets(sb, client_id)
-    if not assets:
-        return []
 
     # Tier-3 guardrail (FR-VERIFY-5): a BUILT asset may enter attribution only once it is verified
     # live AND the operator has opted in. Drafted/approved/handed-off assets never earn a dollar.
@@ -185,190 +259,24 @@ def build_asset_attribution(sb, client_id=None, since=None) -> list[dict]:
     if not assets:
         return []
 
-    outcomes = _fetch_measured_outcomes(sb, client_id, since)
-    outcome_by_cc: dict[tuple, dict] = {}
-    for o in outcomes:
-        key = (o.get("client_id"), o.get("cluster_id"))
-        prev = outcome_by_cc.get(key)
-        if prev is None or str(o.get("week_date") or "") > str(prev.get("week_date") or ""):
-            outcome_by_cc[key] = o
-
-    rec_ids = sorted({a.get("recommendation_id") for a in assets if a.get("recommendation_id")})
-    recs = _fetch_recs(sb, rec_ids) if rec_ids else {}
-
-    by_client: dict[str, list[dict]] = {}
-    for a in assets:
-        by_client.setdefault(a.get("client_id"), []).append(a)
-
-    records: list[dict] = []
+    outcome_by_cc = _latest_outcome_by_cluster(_fetch_measured_outcomes(sb, client_id, since))
     weights = cfg.asset_attribution_channel_weights
+    records: list[dict] = []
 
-    for cid, client_assets in by_client.items():
+    for cid, client_assets in _group_by(assets, "client_id").items():
         sel_rows = _fetch_selection_events(sb, cid) if cid else []
         registry = _fetch_registry(sb, cid) if cid else {}
         ga4_rows = _fetch_ga4_rows(sb, cid) if (cid and cfg.geo_ga4_enabled) else []
 
-        by_cluster: dict[str, list[dict]] = {}
-        for a in client_assets:
-            by_cluster.setdefault(a.get("cluster_id"), []).append(a)
-
-        for clu, cluster_assets in by_cluster.items():
-            outcome = outcome_by_cc.get((cid, clu))
-            w_start = _parse_date((outcome or {}).get("week_date"))
-            w_end = _parse_date((outcome or {}).get("window_elapsed_at"))
-            w_weeks = int((outcome or {}).get("window_weeks") or 6)
-            realized = _realized_usd(outcome)
-
-            has_dollar_row: set[str] = set()
-
-            # ---- Tier-1 gate: rec revenue_basis='none' => every row for that asset is none ----
-            gated, active = [], []
-            for a in cluster_assets:
-                rec_meta = recs.get(a.get("recommendation_id")) or {}
-                if a.get("recommendation_id") and rec_meta.get("revenue_basis", "none") == "none":
-                    gated.append(a)
-                else:
-                    active.append(a)
-            for a in gated:
-                records.append(_row(a, "tier1_modeled", "none", None, w_start, w_end, None, None,
-                                    {"basis_reason": "recommendation_revenue_basis_none"}))
-
-            # ---- Channel A: GA4 landing-page delta (page-level actual; needs a measured window) ----
-            page_attributed: dict[str, float] = {}
-            if ga4_rows and w_start and w_end:
-                for a in active:
-                    if not a.get("content_url"):
-                        continue
-                    d = _ga4_page_delta(ga4_rows, a["content_url"], w_start, w_end, w_weeks)
-                    if d is None:
-                        continue
-                    page_attributed[a["id"]] = d["delta"]
-                    cov = R.coverage_score(d["delta"], realized if realized is not None
-                                           else _opportunity_usd(recs.get(a.get("recommendation_id")) or {}))
-                    conf = R.confidence_score(channel_weight=weights.get("ga4_landing_page", 1.0),
-                                              coverage=cov, lag=1.0, is_modeled=False,
-                                              modeled_discount=cfg.asset_modeled_discount)
-                    records.append(_row(a, "ga4_landing_page", "actual", d["delta"], w_start, w_end, cov, conf, {
-                        "basis_reason": "ga4_landing_page_window_delta",
-                        "current_window_revenue": d["current"],
-                        "baseline_window_revenue": d["baseline"],
-                        "matched_ga4_rows": d["matched_rows"],
-                        "normalized_url": rvx.normalize_url(a["content_url"]),
-                    }))
-                    has_dollar_row.add(a["id"])
-
-            published = [a for a in active if a.get("asset_status") == "published"]
-            eligible_ids = [a["id"] for a in published if a["id"] not in page_attributed]
-            asset_by_id = {a["id"]: a for a in active}
-
-            # ---- Channel C: selection_events AI-channel (already mirrored; cluster pool -> published) ----
-            sel_total, sel_count, sel_no_rev = 0.0, 0, 0
-            for ev in sel_rows:
-                if not ev.get("was_selected"):
-                    continue
-                if rvx.cluster_for_query(registry, ev.get("query_text") or "") != clu:
-                    continue
-                rev = ev.get("revenue_attributed")
-                if rev is None:
-                    sel_no_rev += 1
-                    continue
-                try:
-                    sel_total += float(rev)
-                    sel_count += 1
-                except (TypeError, ValueError):
-                    pass
-            if sel_count > 0 and eligible_ids:
-                alloc = R.allocate_cluster_revenue(sel_total, eligible_ids, page_attributed)
-                unallocated = sel_total - sum(v["usd"] for k, v in alloc.items() if k in eligible_ids)
-                for aid in eligible_ids:
-                    a = asset_by_id[aid]
-                    usd = alloc[aid]["usd"]
-                    cov = R.coverage_score(usd, realized if realized is not None else sel_total)
-                    conf = R.confidence_score(channel_weight=weights.get("selection_events", 0.7),
-                                              coverage=cov, lag=1.0, is_modeled=False,
-                                              modeled_discount=cfg.asset_modeled_discount)
-                    records.append(_row(a, "selection_events", "actual", usd, w_start, w_end, cov, conf, {
-                        "basis_reason": f"selection_events; {alloc[aid]['basis_reason']}",
-                        "selected_event_count": sel_count,
-                        "selected_no_revenue_count": sel_no_rev,
-                        "channel_total_usd": sel_total,
-                        "unallocated_cluster_revenue": max(unallocated, 0.0),
-                    }))
-                    has_dollar_row.add(aid)
-            elif sel_no_rev > 0:
-                for a in (published or active):
-                    records.append(_row(a, "selection_events", "none", None, w_start, w_end, None, None, {
-                        "basis_reason": "selected_events_no_revenue_attributed",
-                        "selected_no_revenue_count": sel_no_rev,
-                    }))
-
-            # ---- Channel B: attribution_events client-level (needs mirror + flag + window) ----
-            if cfg.geo_crm_enabled and cid and w_start and w_end and eligible_ids:
-                attr_rows = _fetch_attribution_events(sb, cid, since=w_start)
-                in_window, pending = [], 0
-                for ev in attr_rows:
-                    ca = _parse_date(ev.get("converted_at"))
-                    if ca is None:
-                        continue
-                    if ca <= w_end:
-                        in_window.append(ev)
-                    else:
-                        pending += 1
-                total = 0.0
-                for ev in in_window:
-                    with contextlib.suppress(TypeError, ValueError):
-                        total += float(ev.get("revenue") or 0)
-                if total > 0:
-                    alloc = R.allocate_cluster_revenue(total, eligible_ids, page_attributed)
-                    for aid in eligible_ids:
-                        a = asset_by_id[aid]
-                        pub = _parse_date(a.get("published_date"))
-                        days = (w_end - pub).days if pub else 0
-                        lag = R.lag_penalty(days, max_days=cfg.crm_lag_penalty_days,
-                                            floor=cfg.crm_lag_penalty_floor)
-                        usd = alloc[aid]["usd"]
-                        cov = R.coverage_score(usd, realized if realized is not None else total)
-                        conf = R.confidence_score(channel_weight=weights.get("attribution_events", 0.5),
-                                                  coverage=cov, lag=lag, is_modeled=False,
-                                                  modeled_discount=cfg.asset_modeled_discount)
-                        records.append(_row(a, "attribution_events", "actual", usd, w_start, w_end, cov, conf, {
-                            "basis_reason": f"attribution_events; {alloc[aid]['basis_reason']}",
-                            "converted_event_count": len(in_window),
-                            "pending_crm_lag_count": pending,
-                            "channel_total_usd": total,
-                            "lag_penalty_days": days,
-                        }))
-                        has_dollar_row.add(aid)
-
-            # ---- tier1_modeled fallback: opportunity share for assets with no actual dollar ----
-            by_rec: dict[str, list[dict]] = {}
-            for a in active:
-                if a["id"] in has_dollar_row or not a.get("recommendation_id"):
-                    continue
-                by_rec.setdefault(a["recommendation_id"], []).append(a)
-            for rid, rec_assets in by_rec.items():
-                opp = _opportunity_usd(recs.get(rid) or {})
-                if opp is None:
-                    continue
-                alloc = R.allocate_cluster_revenue(opp, [a["id"] for a in rec_assets], {})
-                for a in rec_assets:
-                    usd = alloc[a["id"]]["usd"]
-                    cov = R.coverage_score(usd, opp)
-                    conf = R.confidence_score(channel_weight=weights.get("tier1_modeled", 0.4),
-                                              coverage=cov, lag=1.0, is_modeled=True,
-                                              modeled_discount=cfg.asset_modeled_discount)
-                    records.append(_row(a, "tier1_modeled", "modeled", usd, w_start, w_end, cov, conf, {
-                        "basis_reason": f"tier1_modeled_share; {alloc[a['id']]['basis_reason']}",
-                        "rec_opportunity_usd": opp,
-                    }))
-                    has_dollar_row.add(a["id"])
-
-            # ---- guarantee: every asset ends with >=1 row (coverage-KPI denominator) ----
-            emitted_ids = {r["scout_asset_id"] for r in records}
-            for a in active:
-                if a["id"] not in emitted_ids:
-                    records.append(_row(a, "tier1_modeled", "none", None, w_start, w_end, None, None,
-                                        {"basis_reason": "no_revenue_channel_matched"}))
+        for clu, cluster_assets in _group_by(client_assets, "cluster_id").items():
+            records.extend(_cluster_records(
+                cluster_assets,
+                outcome=outcome_by_cc.get((cid, clu)),
+                ga4_rows=ga4_rows,
+                ai_channel=_cluster_ai_channel_revenue(sel_rows, registry, clu),
+                weights=weights,
+                cfg=cfg,
+            ))
 
     return records
 

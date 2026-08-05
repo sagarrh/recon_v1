@@ -215,8 +215,8 @@ def register_generated_asset(sb, brief: dict, payload: str, provenance: dict) ->
         "content_provenance": provenance,
         "build_brief_id": brief.get("id"),
         "target": brief.get("target"),
-        "revenue_opportunity_usd": brief.get("revenue_opportunity_usd"),
-        "revenue_basis": brief.get("revenue_basis"),
+        "revenue_category": brief.get("revenue_category") or "unavailable",
+        "revenue_value_usd": brief.get("revenue_value_usd"),
     }
     asset_id = brief.get("scout_asset_id")
     if not asset_id:

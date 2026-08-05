@@ -58,21 +58,6 @@ def get_ga4_revenue(sb, ga4_property_id: str, weeks: int = 4) -> list[dict]:
         return []
 
 
-def get_attribution_revenue(sb, client_id: str, since=None) -> list[dict]:
-    try:
-        q = (
-            sb.table(m.ATTRIBUTION_EVENTS_TABLE)
-            .select("revenue,converted_at,lead_source")
-            .eq("client_id", str(client_id))
-        )
-        if since is not None:
-            q = q.gte("converted_at", str(since))
-        return q.execute().data or []
-    except Exception as e:
-        log.error("[revenue_context] attribution for %s FAILED (DB may be unreachable): %s", client_id, e, exc_info=True)
-        return []
-
-
 def map_gsc_queries_to_clusters(sb, client_id: str, gsc_rows: list[dict],
                                 company_domain: str = "") -> dict[str, dict]:
     if not gsc_rows:

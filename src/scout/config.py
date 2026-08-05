@@ -143,15 +143,21 @@ class ScoutConfig(BaseSettings):
     deep_recommendation_lookback_weeks: int = 12  # week bound for the per-cluster history readers
     deep_recommendation_max_tokens: int = 80000  # synthesis budget for the (much larger) deep call
     deep_recommendation_model: str = ""  # empty = reuse gemini_model (Kimi K2.6); set to override
-    # Tier 1 revenue layer — all default OFF; flags-off = byte-identical output to today.
+    # Revenue evidence layer — GSC + GA4 only. CRM is deliberately out of scope: without it, B2B
+    # clients measure to commercial intent (GA4 key events) and their revenue stays `unavailable`.
     revenue_layer_enabled: bool = False
     geo_gsc_enabled: bool = False
     geo_ga4_enabled: bool = False
-    geo_crm_enabled: bool = False
     revenue_outcome_enabled: bool = False
     revenue_calibration_feedback_enabled: bool = False
-    revenue_ai_referral_capture_fraction: float = 0.15
-    revenue_coefficient_version: str = "rev_v1"
+    revenue_coefficient_version: str = "rev_v2_categories"
+    # Modeled scenarios are planning assumptions, not revenue. Off = computed internally (when a capture
+    # fraction is supplied) but never rendered beside measured revenue, where it would read as a forecast.
+    modeled_scenario_enabled: bool = False
+    modeled_scenario_client_visible: bool = False
+    # Assumed share of demand reachable via AI referral. No defensible empirical basis — it exists only
+    # to make the modeled scenario reproducible, and is passed explicitly rather than defaulted.
+    modeled_scenario_capture_fraction: float = 0.15
     # Tier 2 — per-asset dollar attribution (all default OFF; flags-off = byte-identical to today).
     asset_attribution_enabled: bool = False  # Tier-2 master (with revenue_layer_enabled)
     geo_content_tracking_enabled: bool = (
@@ -166,15 +172,11 @@ class ScoutConfig(BaseSettings):
     revenue_asset_surfacing_enabled: bool = (
         False  # internal-report attributed line (compute-and-store silently first)
     )
+    # Only exact GA4 landing-page matches earn asset-level dollars; there is no other linked channel.
     asset_attribution_channel_weights: dict = {
         "ga4_landing_page": 1.0,
-        "selection_events": 0.7,
-        "attribution_events": 0.5,
-        "tier1_modeled": 0.4,
     }
     asset_modeled_discount: float = 0.6  # confidence multiplier for modeled-basis rows
-    crm_lag_penalty_days: int = 90  # days over which lag_penalty decays to its floor
-    crm_lag_penalty_floor: float = 0.4  # minimum lag_penalty for long-lag CRM dollars
     # Tier 3 — Asset Builder / Execution Arm (all default OFF; separate CLI surface, never a graph node).
     asset_builder_enabled: bool = (
         False  # MASTER — off = every Tier-3 CLI short-circuits before any DB read

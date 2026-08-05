@@ -58,8 +58,11 @@ TABLE_REQUIREMENTS: dict[str, frozenset[str]] = {
     "investigations": frozenset(
         {"run_id", "trigger_key", "client_id", "cluster_id", "ai_citation_changes"}
     ),
+    # revenue_category is required: without sql/0200_recon_revenue_categories.sql applied to the
+    # Supabase project, the recommendation writer fails on an unknown column mid-run. `db audit`
+    # is where that must surface, not a live pipeline.
     "recommendations": frozenset(
-        {"run_id", "client_id", "cluster_id", "validation_status"}
+        {"run_id", "client_id", "cluster_id", "validation_status", "revenue_category"}
     ),
     "reports": frozenset(
         {"run_id", "recommendation_id", "client_id", "validation_status"}
@@ -68,7 +71,9 @@ TABLE_REQUIREMENTS: dict[str, frozenset[str]] = {
     "scout_decision_log": frozenset(
         {"run_id", "client_id", "cluster_id", "noise", "field"}
     ),
-    "scout_outcomes": frozenset({"recommendation_id", "run_id", "client_id"}),
+    "scout_outcomes": frozenset(
+        {"recommendation_id", "run_id", "client_id", "revenue_category", "target_pages"}
+    ),
     "prompt_log": frozenset({"run_id", "node", "model", "total_tokens"}),
 }
 
