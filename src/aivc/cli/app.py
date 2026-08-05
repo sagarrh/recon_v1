@@ -9,9 +9,11 @@ from uuid import UUID
 
 import typer
 
-from ai_visibility.companies.resolver import resolve_client
+from ai_visibility.companies.resolver import resolve_client, resolve_client_by_id
 from ai_visibility.config.settings import get_settings
 from ai_visibility.database.validation import check_database
+from ai_visibility.measurement.persistence import load_outcome_summary
+from ai_visibility.measurement.runner import evaluate_plans, plan_measurements
 from aivc.config import get_aivc_settings
 from aivc.database import audit_shared_schema
 from aivc.database.evidence import resolve_latest_evidence_parent
@@ -39,10 +41,14 @@ report_app = typer.Typer(help="Prepare compact Citation + Recon inputs for a cli
 execution_app = typer.Typer(
     help="Record when a recommendation was implemented, so its outcome can be measured."
 )
+measurement_app = typer.Typer(
+    help="Measure what followed an executed recommendation in Google Search Console."
+)
 app.add_typer(db_app, name="db")
 app.add_typer(citations_app, name="citations")
 app.add_typer(report_app, name="report")
 app.add_typer(execution_app, name="execution")
+app.add_typer(measurement_app, name="measurement")
 
 
 def _print(value: Any) -> None:
@@ -230,6 +236,29 @@ def report_generate(
     _print(_report_result(result))
 
 
+_COMPANY_OPT = typer.Option("--company", help="Exact client company name.")
+_CLIENT_ID_OPT = typer.Option("--client-id", help="Client UUID; use when the name is ambiguous.")
+
+
+def _resolved_client(company: str | None, client_id: UUID | None) -> tuple[Any, frozenset[str]]:
+    """Resolve a client by exact name or by id, and return the domains it owns.
+
+    --client-id exists because duplicate client rows make some names genuinely ambiguous, and the
+    resolver refuses to guess rather than picking one. The measurement exclusion list deliberately
+    does NOT disambiguate here: it is measurement policy, and letting it alter identity resolution
+    would mean a measurement setting silently changed which client a citation report was built for.
+    """
+    if (company is None) == (client_id is None):
+        raise ValueError("Provide exactly one of --company or --client-id.")
+    settings = get_settings()
+    client = (
+        resolve_client_by_id(settings, client_id)
+        if client_id is not None
+        else resolve_client(settings, str(company))
+    )
+    return client, frozenset(d.casefold() for d in client.official_domains if d)
+
+
 def _execution_json(execution: Any) -> dict[str, Any]:
     return {
         "subject_type": execution.subject_type,
@@ -251,7 +280,8 @@ def execution_record(
     recommendation_id: Annotated[
         str, typer.Option("--recommendation-id", help="Recommendation this action implements.")
     ],
-    company: Annotated[str, typer.Option("--company", help="Exact client company name.")],
+    company: Annotated[str | None, _COMPANY_OPT] = None,
+    client_id: Annotated[UUID | None, _CLIENT_ID_OPT] = None,
     implemented_at: Annotated[
         datetime | None,
         typer.Option(
@@ -284,7 +314,7 @@ def execution_record(
 
     def action() -> dict[str, Any]:
         settings = get_settings()
-        client = resolve_client(settings, company)
+        client, _ = _resolved_client(company, client_id)
         execution = record_execution(
             settings,
             subject_id=recommendation_id,
@@ -351,21 +381,109 @@ def execution_show(
 
 @execution_app.command("list")
 def execution_list(
-    company: Annotated[
-        str | None, typer.Option("--company", help="Restrict to one client.")
-    ] = None,
+    company: Annotated[str | None, _COMPANY_OPT] = None,
+    client_id: Annotated[UUID | None, _CLIENT_ID_OPT] = None,
     status: Annotated[str | None, typer.Option("--status")] = None,
 ) -> None:
     """List execution records, newest implementation first."""
 
     def action() -> dict[str, Any]:
         settings = get_settings()
-        client_id = resolve_client(settings, company).client_id if company else None
-        executions = list_executions(settings, client_id=client_id, status=status)
+        resolved = client_id
+        if company is not None:
+            resolved = _resolved_client(company, None)[0].client_id
+        executions = list_executions(settings, client_id=resolved, status=status)
         return {
             "count": len(executions),
             "measurable": sum(1 for e in executions if e.is_measurable),
             "executions": [_execution_json(e) for e in executions],
+        }
+
+    _print(_run(action))
+
+
+@measurement_app.command("plan")
+def measurement_plan(
+    company: Annotated[str | None, _COMPANY_OPT] = None,
+    client_id: Annotated[UUID | None, _CLIENT_ID_OPT] = None,
+) -> None:
+    """Create a measurement plan for every executed recommendation.
+
+    Run this as soon as executions are recorded. The plan fixes the windows and targets BEFORE the
+    follow-up window closes, so the comparison cannot later be chosen to suit the answer."""
+
+    def action() -> dict[str, Any]:
+        client, domains = _resolved_client(company, client_id)
+        reports = plan_measurements(
+            get_settings(), client_id=client.client_id, owned_domains=domains
+        )
+        return {
+            "client": client.canonical_name,
+            "planned": len(reports),
+            "by_status": {
+                status: sum(1 for r in reports if r.status == status)
+                for status in sorted({r.status for r in reports})
+            },
+            "plans": [
+                {
+                    "subject_id": r.subject_id, "status": r.status, "reason": r.reason,
+                    "matched_queries": r.matched_queries, "matched_pages": r.matched_pages,
+                }
+                for r in reports
+            ],
+        }
+
+    _print(_run(action))
+
+
+@measurement_app.command("evaluate")
+def measurement_evaluate(
+    company: Annotated[str | None, _COMPANY_OPT] = None,
+    client_id: Annotated[UUID | None, _CLIENT_ID_OPT] = None,
+) -> None:
+    """Capture both windows and record an outcome for every plan whose window has closed."""
+
+    def action() -> dict[str, Any]:
+        client, domains = _resolved_client(company, client_id)
+        results = evaluate_plans(
+            get_settings(), client_id=client.client_id, owned_domains=domains
+        )
+        return {
+            "client": client.canonical_name,
+            "evaluated": len(results),
+            "by_classification": {
+                name: sum(1 for r in results if r.classification == name)
+                for name in sorted({r.classification for r in results})
+            },
+            "outcomes": [
+                {
+                    "subject_id": r.subject_id,
+                    "classification": r.classification,
+                    "confidence": r.confidence,
+                    "deltas": r.deltas,
+                }
+                for r in results
+            ],
+        }
+
+    _print(_run(action))
+
+
+@measurement_app.command("status")
+def measurement_status(
+    company: Annotated[str | None, _COMPANY_OPT] = None,
+    client_id: Annotated[UUID | None, _CLIENT_ID_OPT] = None,
+) -> None:
+    """Show every plan for a client and whatever outcome it has reached."""
+
+    def action() -> dict[str, Any]:
+        client, _ = _resolved_client(company, client_id)
+        rows = load_outcome_summary(get_settings(), client_id=client.client_id)
+        return {
+            "client": client.canonical_name,
+            "plan_count": len(rows),
+            "measured": sum(1 for r in rows if r.get("classification")),
+            "plans": rows,
         }
 
     _print(_run(action))
