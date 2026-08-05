@@ -52,7 +52,6 @@ app.add_typer(pages_app, name="pages")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(report_app, name="report")
 
-
 class ReportFormat(StrEnum):
     json = "json"
     markdown = "markdown"
