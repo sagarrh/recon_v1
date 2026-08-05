@@ -96,7 +96,11 @@ def _measure_revenue(sb, outcome_row: dict) -> tuple[float | None, str]:
         handles = rvx.get_client_revenue_handles(sb, outcome_row.get("client_id", ""))
         ga4 = rvx.get_ga4_revenue(sb, handles.get("ga4_property_id", ""))
         normalized = {rvx.normalize_url(p) for p in pages}
-        rev = R.actual_revenue_from_ga4(ga4_rows=ga4, landing_pages=normalized)
+        # Same normalizer on both sides — GA4 emits paths on some properties and absolute URLs on
+        # others, and a form mismatch would silently report `unavailable` for real revenue.
+        rev = R.actual_revenue_from_ga4(
+            ga4_rows=ga4, landing_pages=normalized, normalizer=rvx.normalize_url
+        )
         category = R.resolve_revenue_category(
             page_scoped_revenue=rev,
             linkage=R.LINKAGE_EXACT_PAGE if rev is not None else R.LINKAGE_NONE,

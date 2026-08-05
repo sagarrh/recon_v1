@@ -148,21 +148,29 @@ def client_visible(findings, *, modeled_scenario_visible: bool = False) -> list[
 
 # ---- measured revenue ----
 
-def actual_revenue_from_ga4(*, ga4_rows: list[dict], landing_pages: set[str]) -> float | None:
-    """Sum GA4 revenue for the given normalized landing pages ONLY.
+def actual_revenue_from_ga4(*, ga4_rows: list[dict], landing_pages: set[str],
+                            normalizer=None) -> float | None:
+    """Sum GA4 revenue for the given landing pages ONLY.
 
     `landing_pages` is required and must be non-empty: property-wide GA4 revenue is not this cluster's
-    revenue, and returning it here is how unrelated revenue used to acquire a cluster's label."""
+    revenue, and returning it here is how unrelated revenue used to acquire a cluster's label.
+
+    `normalizer` must be the SAME function used to normalize `landing_pages`, and is applied to each
+    row's landing_page so both sides of the comparison are in one form. GA4 emits either a path or an
+    absolute URL depending on the property; comparing the two forms directly matches nothing and
+    silently reports `unavailable` for revenue that genuinely exists. Pass
+    scout.db.revenue_context.normalize_url unless the caller has already normalized both sides."""
     import logging
     _log = logging.getLogger(__name__)
     if not landing_pages:
         _log.warning("[revenue] GA4 revenue requested with no target landing pages — returning None")
         return None
+    normalize = normalizer or (lambda value: value)
     total = 0.0
     count = 0
     skipped = 0
     for row in (ga4_rows or []):
-        lp = row.get("landing_page") or ""
+        lp = normalize(row.get("landing_page") or "")
         if lp not in landing_pages:
             continue
         rev = row.get("revenue")
@@ -285,16 +293,20 @@ def _graded_value(category: RevenueCategory, *, page_revenue: float | None, page
 def compute_cluster_revenue(*, demand: dict, financials: dict, sov: dict,
                             ga4: dict | list | None, fx_rates: dict | None,
                             target_landing_pages: set[str] | None = None,
-                            capture_fraction: float | None = None) -> dict:
+                            capture_fraction: float | None = None,
+                            normalizer=None) -> dict:
     """Grade the revenue evidence for one cluster. Returns a category, never an 'opportunity'.
 
     Measured GA4 revenue is scoped to `target_landing_pages`; with no mapped pages there is no linkage
-    and the result is `unavailable`, optionally accompanied by an internal modeled scenario."""
+    and the result is `unavailable`, optionally accompanied by an internal modeled scenario.
+    `normalizer` must be the same function used to normalize `target_landing_pages` — see
+    actual_revenue_from_ga4."""
     currency = financials.get("currency", "USD")
     pages = target_landing_pages or set()
 
     ga4_rows = ga4 if isinstance(ga4, list) else []
-    page_revenue = (actual_revenue_from_ga4(ga4_rows=ga4_rows, landing_pages=pages)
+    page_revenue = (actual_revenue_from_ga4(ga4_rows=ga4_rows, landing_pages=pages,
+                                            normalizer=normalizer)
                     if pages else None)
     linkage = LINKAGE_EXACT_PAGE if page_revenue is not None else LINKAGE_NONE
 
