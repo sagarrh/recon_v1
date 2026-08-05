@@ -343,6 +343,9 @@ def _write_recommendations(sb, state: ScoutState, client_ids: dict[str, str], in
             "target_rejections": _to_jsonable(d.get("target_rejections")) or [],
             "expected_leading_outcome": d.get("expected_leading_outcome") or "",
             "expected_business_outcome": d.get("expected_business_outcome") or "",
+            "priority_score": d.get("priority_score", 0.0),
+            "priority_band": d.get("priority_band", "low"),
+            "priority_components": _to_jsonable(d.get("priority_components")) or {},
         })
     if not rows:
         return {}

@@ -296,6 +296,10 @@ def execution_record(
             target_queries=list(query or []),
             action_type=action_type,
             implementation_notes=notes,
+            # The resolver's authority on what this client owns. Pages outside it are refused:
+            # target pages scope GA4 measurement, so a third-party URL would attribute
+            # someone else's traffic to this client.
+            owned_domains=tuple(client.official_domains),
         )
         return _execution_json(execution)
 

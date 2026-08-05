@@ -9,6 +9,7 @@ from scout.config import get_config
 from scout.keys import make_cluster_key, make_trigger_key
 from scout.llm import call_synthesis, load_prompt
 from scout.models.recommendation import Recommendation
+from scout.priority import score_signal
 from scout.state import ScoutState
 from scout.targets import apply_targets, owned_domains
 from scout.utils import is_transient
@@ -285,9 +286,20 @@ def recommendation_generation(state: ScoutState) -> dict:
         if rev is not None:
             verdict.revenue_category = rev["revenue_category"]
 
+        _apply_priority_score(
+            result, cfg, trigger,
+            client_sov_now=client_sov_now,
+            demand=client_revenue_bundle.get(trigger.client_id, {})
+            .get("demand_by_cluster", {}).get(verdict.cluster_id, {}),
+            readiness=cr,
+        )
+
         recommendations.append(_stamp_context(result, cr, fin, wc, rev, client_gaps_lookup.get(trigger.client_id),
                                               client_profile_lookup.get(trigger.client_id)))
 
+    # Highest commercial priority first. Ordering is by an auditable component vector, never by a
+    # dollar figure — the old revenue ordering ranked clusters by how small the client's share was.
+    recommendations.sort(key=lambda r: -r.priority_score)
     return {"recommendations": recommendations}
 
 
@@ -315,6 +327,28 @@ def _apply_validated_targets(rec: Recommendation, client: dict) -> None:
             f"{r['url']} ({r['reason']})" for r in validated["target_rejections"][:5]
         )
         print(f"[recommendation_gen] dropped unowned/invalid target pages: {dropped}")
+
+
+def _apply_priority_score(rec: Recommendation, cfg, trigger, *, client_sov_now, demand,
+                          readiness) -> None:
+    """Score how much this signal deserves action, in place.
+
+    Runs after target validation so `actionability` reflects a real, validated page rather than one
+    the LLM merely proposed. Components with no input are excluded rather than scored zero — see
+    scout/priority.py."""
+    score = score_signal(
+        shift_magnitude=getattr(trigger, "shift_magnitude", None),
+        client_sov_pp=client_sov_now,
+        search_impressions=(demand or {}).get("impressions"),
+        mapping_confidence=rec.mapping_confidence,
+        evidence_confidence=rec.confidence,
+        action_type=rec.action_type,
+        client_readiness=readiness,
+        weights=getattr(cfg, "priority_weights", None) or None,
+    )
+    rec.priority_score = score.score
+    rec.priority_band = score.band
+    rec.priority_components = score.to_dict()
 
 
 def _cluster_revenue(cfg, verdict, trigger, client_revenue_bundle, *, client_sov_now,

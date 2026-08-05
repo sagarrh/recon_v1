@@ -37,6 +37,11 @@ class Recommendation(BaseModel):
     target_rejections: list[dict] = Field(default_factory=list)
     expected_leading_outcome: str = ""    # e.g. "more AI citations and GSC impressions"
     expected_business_outcome: str = ""   # e.g. "more qualified visits and demo requests"
+    # Commercial qualification (scout/priority.py). Transparent and additive — never a dollar figure.
+    # priority_components carries the full vector so any score can be explained, not just trusted.
+    priority_score: float = Field(0.0, ge=0.0, le=100.0)
+    priority_band: str = Field("low", pattern="^(critical|high|medium|low)$")
+    priority_components: dict = Field(default_factory=dict)
     # Carried GEO context (in-memory only; NOT persisted by sed_writer) — surfaced deterministically in report_gen.
     revenue_context: dict = Field(default_factory=dict)
     co_mention_density: dict = Field(default_factory=dict)

@@ -151,6 +151,10 @@ class ScoutConfig(BaseSettings):
     revenue_outcome_enabled: bool = False
     revenue_calibration_feedback_enabled: bool = False
     revenue_coefficient_version: str = "rev_v2_categories"
+    # Commercial priority score (scout/priority.py). Replaces the SOV-derived dollar figure as the
+    # ordering signal — that one ranked clusters by how SMALL the client's share was. Empty dict =
+    # use the module defaults; override individual component names to retune without a code change.
+    priority_weights: dict = {}
     # Modeled scenarios are planning assumptions, not revenue. Off = computed internally (when a capture
     # fraction is supplied) but never rendered beside measured revenue, where it would read as a forecast.
     modeled_scenario_enabled: bool = False

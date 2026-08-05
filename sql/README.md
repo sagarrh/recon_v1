@@ -30,3 +30,5 @@ Apply in order; each states its prerequisite and its own preflight query.
 - `0201_recon_recommendation_targets.sql` — adds the measurement grain to `recommendations`
   (`target_pages`, `target_queries`, `action_type`, `mapping_confidence`). Requires 0200.
   Without it the recommendation writer fails on unknown columns.
+- `0202_recon_priority_score.sql` — adds the commercial priority score and its component vector,
+  which replaced the SOV-derived dollar figure as the ordering signal. Requires 0201.

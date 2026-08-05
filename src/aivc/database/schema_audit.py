@@ -77,6 +77,10 @@ TABLE_REQUIREMENTS: dict[str, frozenset[str]] = {
             "target_queries",
             "action_type",
             "mapping_confidence",
+            # sql/0202 — the ordering signal that replaced the SOV-derived dollar figure.
+            "priority_score",
+            "priority_band",
+            "priority_components",
         }
     ),
     "reports": frozenset(

@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 from ai_visibility.config.settings import Settings
 from ai_visibility.database.connection import connect
+from scout.targets import validate_target_pages, validate_target_queries
 
 SUBJECT_RECOMMENDATION = "recon_recommendation"
 
@@ -54,6 +55,37 @@ def _row_to_execution(row: dict[str, Any]) -> ActionExecution:
     )
 
 
+def _validated_pages(pages: list[str] | None, owned_domains: tuple[str, ...] | None) -> list[str]:
+    """Canonicalize target pages and refuse any the client does not own.
+
+    Enforced here rather than in the CLI so that every caller is bound by it. These pages scope GA4
+    revenue measurement, so a competitor URL recorded here would attribute someone else's traffic
+    to this client — the exact error the revenue-category work exists to prevent. Rejection is loud:
+    a typo must fail visibly, not disappear into an empty list the operator believes was saved."""
+    if not pages:
+        return []
+    client = {"company_domain": "", "company_website": ""}
+    if owned_domains:
+        client = {"company_domain": owned_domains[0], "company_website": f"https://{owned_domains[0]}"}
+    accepted, rejected = validate_target_pages(pages, client)
+    # Any additional owned domain gets its own pass; a client may legitimately span several.
+    for extra in (owned_domains or ())[1:]:
+        if not rejected:
+            break
+        retry_client = {"company_domain": extra, "company_website": f"https://{extra}"}
+        more, rejected = validate_target_pages([r["url"] for r in rejected], retry_client)
+        accepted.extend(p for p in more if p not in accepted)
+    if rejected:
+        detail = ", ".join(f"{r['url']} ({r['reason']})" for r in rejected)
+        known = ", ".join(owned_domains or ()) or "none registered for this client"
+        raise ValueError(
+            f"Refusing to record target pages the client does not own: {detail}. "
+            f"Owned domains: {known}. Target pages scope GA4 measurement, so a page on another "
+            "domain would attribute someone else's traffic to this client."
+        )
+    return accepted
+
+
 def record_execution(
     settings: Settings,
     *,
@@ -67,6 +99,7 @@ def record_execution(
     action_type: str = "other",
     implementation_notes: str | None = None,
     evidence_urls: list[str] | None = None,
+    owned_domains: tuple[str, ...] | None = None,
     subject_type: str = SUBJECT_RECOMMENDATION,
 ) -> ActionExecution:
     """Record (or update) that a recommendation was implemented.
@@ -80,6 +113,8 @@ def record_execution(
             f"status={status!r} requires --implemented-at: an outcome window cannot be "
             "anchored without the date the change actually shipped."
         )
+    target_pages = _validated_pages(target_pages, owned_domains)
+    target_queries = validate_target_queries(target_queries)
 
     with connect(settings) as connection, connection.cursor() as cursor:
         row = cursor.execute(
