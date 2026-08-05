@@ -62,14 +62,25 @@ def build_window(
     today: date,
     window_days: int = 28,
     source_lag_days: int = 2,
+    source_fresh_through: date | None = None,
 ) -> MeasurementWindow:
     """Build the baseline/follow-up pair for one implementation date.
 
     Baseline is the `window_days` complete days ending the day BEFORE the anchor; follow-up is the
     `window_days` complete days starting the day AFTER. The anchor day itself belongs to neither:
     a change shipped mid-day contaminates both sides of its own comparison.
+
+    `source_lag_days` is a policy assumption about Google's reporting delay. `source_fresh_through`
+    is what the source ACTUALLY holds, and when supplied the earlier of the two wins. Observed lag
+    routinely exceeds the assumed two days, and trusting the assumption would mark a window settled
+    while its final days were still missing — silently undercounting the follow-up period.
     """
-    fresh_through = today - timedelta(days=source_lag_days)
+    assumed_fresh_through = today - timedelta(days=source_lag_days)
+    fresh_through = (
+        min(assumed_fresh_through, source_fresh_through)
+        if source_fresh_through is not None
+        else assumed_fresh_through
+    )
 
     if implemented_on is None:
         return MeasurementWindow(

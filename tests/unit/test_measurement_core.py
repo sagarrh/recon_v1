@@ -186,6 +186,37 @@ def test_incomplete_follow_up_waits_rather_than_reporting_a_partial_result():
     assert "more day(s) needed" in window.reason
 
 
+def test_actual_source_freshness_overrides_the_assumed_lag():
+    """The configured lag is a policy guess; what the source holds is a fact.
+
+    Observed here: the assumed 2-day lag put fresh_through at 08-03 while the source only held
+    complete data through 08-01. Trusting the assumption marks a window settled with its final
+    days missing, which reads as a decline that has not happened."""
+    # Anchor chosen so the follow-up window ends exactly on the assumed freshness boundary:
+    # ready under the assumption, not ready against what the source actually holds.
+    anchor = date(2026, 7, 6)
+    optimistic = W.build_window(anchor, today=date(2026, 8, 5), window_days=28, source_lag_days=2)
+    assert optimistic.fresh_through == date(2026, 8, 3)
+    assert optimistic.follow_up_end == date(2026, 8, 3)
+    assert optimistic.ready                      # would measure a window it cannot fully cover
+
+    grounded = W.build_window(
+        anchor, today=date(2026, 8, 5), window_days=28, source_lag_days=2,
+        source_fresh_through=date(2026, 8, 1),
+    )
+    assert grounded.fresh_through == date(2026, 8, 1)
+    assert grounded.status == W.WAITING_FOR_WINDOW
+
+
+def test_the_earlier_of_assumed_and_actual_freshness_wins():
+    """A source running AHEAD of the policy lag must not shorten the settle period either."""
+    window = W.build_window(
+        date(2026, 6, 1), today=date(2026, 8, 5), window_days=28, source_lag_days=2,
+        source_fresh_through=date(2026, 8, 4),   # fresher than today-2
+    )
+    assert window.fresh_through == date(2026, 8, 3)
+
+
 def test_google_two_day_lag_is_enforced():
     """A follow-up ending today is not yet settled: both integrations clamp to today-2."""
     anchor = date(2026, 6, 1)

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from ai_visibility.config.settings import Settings
@@ -22,6 +22,11 @@ from ai_visibility.measurement.tenancy import TenantScope, host_matches_owned
 
 # Explicit allowlist. `user_metrics` holds refresh tokens; nothing here touches it beyond the
 # handle already resolved in TenantScope, and no `select *` is ever issued against these tables.
+#
+# WARNING: the mirrored `ctr` column is a PERCENTAGE (0-100), not a fraction — a row with
+# clicks=1, impressions=1 stores ctr=100. Nothing in this package reads it: CTR is always
+# recomputed from summed clicks and impressions, which is both the correct aggregation and an
+# accidental escape from this trap. Anything that does read it must not assume 0-1.
 GSC_COLUMNS = ("metric_date", "query", "page", "clicks", "impressions", "ctr", "position")
 
 _SELECT = """
@@ -137,6 +142,25 @@ def fetch_window(
         effective_start=min(dates) if dates else None,
         effective_end=max(dates) if dates else None,
     )
+
+
+def fetch_fresh_through(settings: Settings, scope: TenantScope) -> date | None:
+    """The last date this client's Search Console data can be trusted to be complete.
+
+    Returns max(metric_date) minus one day. The most recent day present is routinely partial —
+    observed here as 3 rows against a ~90-row daily norm — so including it would drag the tail of
+    every follow-up window toward zero and read as a decline that has not happened."""
+    if not scope.gsc_measurable or scope.gsc_site_url is None:
+        return None
+    with connect(settings) as connection, connection.cursor() as cursor:
+        cursor.execute("set transaction read only")
+        row = cursor.execute(
+            "select max(metric_date) as latest from public.gsc_query_page_metrics "
+            "where site_url = %s",
+            (scope.gsc_site_url,),
+        ).fetchone()
+    latest = row.get("latest") if row else None
+    return (latest - timedelta(days=1)) if latest else None
 
 
 def owned_page_checker(scope: TenantScope) -> Callable[[str], bool]:

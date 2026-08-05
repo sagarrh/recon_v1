@@ -109,7 +109,7 @@ def _plan_status(
 
 def _plan_one(
     settings: Settings, subject: dict[str, Any], *, client_id: UUID,
-    scope: tenancy.TenantScope, today: date,
+    scope: tenancy.TenantScope, today: date, source_fresh_through: date | None,
 ) -> PlanReport:
     """Plan a single executed recommendation."""
     anchor_at: datetime = subject["implemented_at"]
@@ -117,6 +117,7 @@ def _plan_one(
         anchor_at.date(), today=today,
         window_days=settings.measurement_window_days,
         source_lag_days=settings.measurement_source_lag_days,
+        source_fresh_through=source_fresh_through,
     )
     if window.baseline_start is None or window.follow_up_end is None:
         return PlanReport(subject["subject_id"], "unmeasurable", window.reason)
@@ -170,8 +171,12 @@ def plan_measurements(
     """Create or refresh a measurement plan for every executed recommendation."""
     today = today or date.today()
     scope = _load_scope(settings, client_id, owned_domains)
+    fresh_through = gsc.fetch_fresh_through(settings, scope)
     return [
-        _plan_one(settings, subject, client_id=client_id, scope=scope, today=today)
+        _plan_one(
+            settings, subject, client_id=client_id, scope=scope, today=today,
+            source_fresh_through=fresh_through,
+        )
         for subject in _executed_subjects(settings, client_id)
     ]
 
@@ -186,6 +191,7 @@ def evaluate_plans(
     """Capture both windows and record an outcome for every plan whose window has closed."""
     today = today or date.today()
     scope = _load_scope(settings, client_id, owned_domains)
+    source_fresh_through = gsc.fetch_fresh_through(settings, scope)
     results: list[EvaluationReport] = []
 
     for plan in persistence.load_plans(settings, client_id=client_id):
@@ -194,6 +200,7 @@ def evaluate_plans(
             today=today,
             window_days=plan.window_days,
             source_lag_days=settings.measurement_source_lag_days,
+            source_fresh_through=source_fresh_through,
         )
         vocabulary: tuple[list[str], list[str]] = ([], [])
         if scope.gsc_measurable:

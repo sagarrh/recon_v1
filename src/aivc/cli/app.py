@@ -29,6 +29,8 @@ from aivc.orchestration import (
     run_integrated_pipeline,
 )
 from aivc.producers import generate_citation_bundle
+from aivc.reporting.funnel import load_execution_funnel
+from aivc.reporting.outcome_cards import load_outcome_cards
 
 app = typer.Typer(
     name="aivc",
@@ -484,6 +486,31 @@ def measurement_status(
             "plan_count": len(rows),
             "measured": sum(1 for r in rows if r.get("classification")),
             "plans": rows,
+        }
+
+    _print(_run(action))
+
+
+@measurement_app.command("report")
+def measurement_report(
+    company: Annotated[str | None, _COMPANY_OPT] = None,
+    client_id: Annotated[UUID | None, _CLIENT_ID_OPT] = None,
+) -> None:
+    """Outcome cards for every executed recommendation, plus the execution funnel.
+
+    Each card reports the funnel one layer at a time. A layer with no source says `unavailable`,
+    never zero — "no GA4 connection" and "no conversions" are different facts, and collapsing them
+    would let a missing integration read as a failed intervention."""
+
+    def action() -> dict[str, Any]:
+        settings = get_settings()
+        client, _ = _resolved_client(company, client_id)
+        cards = load_outcome_cards(settings, client_id=client.client_id)
+        funnel = load_execution_funnel(settings, client_id=client.client_id)
+        return {
+            "client": client.canonical_name,
+            **funnel.as_dict(),
+            "cards": [card.as_dict() for card in cards],
         }
 
     _print(_run(action))
