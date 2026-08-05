@@ -24,6 +24,19 @@ class Recommendation(BaseModel):
     slack_report: str
     timeline: str = ""
     window_weeks: int = 0      # measurement-window upper bound (weeks); outcome_measure prefers this over timeline prose
+    # What this recommendation targets, validated in scout/targets.py. These are what make an outcome
+    # measurable at all: GSC is measured at target_queries, GA4 at target_pages. Pages are always
+    # client-owned — a competitor or third-party URL is rejected, never carried.
+    target_pages: list[str] = Field(default_factory=list)
+    target_queries: list[str] = Field(default_factory=list)
+    action_type: str = Field(
+        "other",
+        pattern="^(content_update|new_page|schema|ai_access|third_party|measurement|other)$",
+    )
+    mapping_confidence: str = Field("unmapped", pattern="^(exact|query_only|unmapped)$")
+    target_rejections: list[dict] = Field(default_factory=list)
+    expected_leading_outcome: str = ""    # e.g. "more AI citations and GSC impressions"
+    expected_business_outcome: str = ""   # e.g. "more qualified visits and demo requests"
     # Carried GEO context (in-memory only; NOT persisted by sed_writer) — surfaced deterministically in report_gen.
     revenue_context: dict = Field(default_factory=dict)
     co_mention_density: dict = Field(default_factory=dict)

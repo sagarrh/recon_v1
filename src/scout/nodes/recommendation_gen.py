@@ -10,6 +10,7 @@ from scout.keys import make_cluster_key, make_trigger_key
 from scout.llm import call_synthesis, load_prompt
 from scout.models.recommendation import Recommendation
 from scout.state import ScoutState
+from scout.targets import apply_targets, owned_domains
 from scout.utils import is_transient
 
 _TYPE_MAP = {
@@ -74,6 +75,12 @@ def recommendation_generation(state: ScoutState) -> dict:
     ai_citation_changes = state.get("ai_citation_changes", {})
     client_readiness = state.get("client_readiness", {})
     recommendations: list[Recommendation] = []
+
+    # Carries company_domain / company_website — the only authority on which pages a recommendation
+    # is allowed to target. Without it every page the LLM proposes is rejected as unowned.
+    client_by_id: dict[str, dict] = {
+        str(c.get("client_id")): c for c in (state.get("clients") or []) if c.get("client_id")
+    }
 
     client_sov_lookup: dict[tuple[str, str], float] = {}
     for rec in state.get("sov_tracking_records", []):
@@ -178,29 +185,7 @@ def recommendation_generation(state: ScoutState) -> dict:
         expected_priority = _priority_for_trigger(trigger)
 
         client_sov_now = client_sov_lookup.get((trigger.client_id, trigger.cluster_id))
-        rev = None
-        if cfg.revenue_layer_enabled:
-            from scout import revenue as R
-            bundle = client_revenue_bundle.get(trigger.client_id, {})
-            demand = bundle.get("demand_by_cluster", {}).get(verdict.cluster_id, {})
-            sov_for_rev = {
-                "client_sov_pp": client_sov_now,
-                "primary_competitor_sov_pp": next(
-                    (f.get("delta_pp") for f in (verdict.field or []) if f.get("competitor") == verdict.primary_competitor),
-                    None,
-                ),
-            }
-            # No structured target pages yet (Phase 1.3), so there is no page-level linkage and the
-            # category resolves to `unavailable` — correct, not a regression. Once recommendations
-            # carry validated target_pages, pass them here to earn `recorded`/`influenced`.
-            rev = R.compute_cluster_revenue(
-                demand=demand, financials=fin or {}, sov=sov_for_rev,
-                ga4=bundle.get("ga4"), fx_rates=bundle.get("fx_rates"),
-                target_landing_pages=None,
-                capture_fraction=(cfg.modeled_scenario_capture_fraction
-                                  if cfg.modeled_scenario_enabled else None),
-            )
-            verdict.revenue_category = rev["revenue_category"]
+        client_record = client_by_id.get(trigger.client_id, {})
 
         _ground_events(trigger, get_config())
         use_deep = _use_deep(deep, verdict)
@@ -210,10 +195,12 @@ def recommendation_generation(state: ScoutState) -> dict:
             )
             evidence_block = _build_deep_evidence_block(
                 verdict, trigger, website_changes, third_party_signals,
-                ai_citation_changes, client_sov_now, fin, cr, history,
+                ai_citation_changes, client_sov_now, fin, cr, history, client_record,
             )
         else:
-            evidence_block = _build_evidence_block(trigger, wc, tps, aic, client_sov_now, fin, cr)
+            evidence_block = _build_evidence_block(
+                trigger, wc, tps, aic, client_sov_now, fin, cr, client_record
+            )
             evidence_block += _field_evidence_block(verdict)
         if abstained:
             if use_deep:
@@ -243,6 +230,17 @@ def recommendation_generation(state: ScoutState) -> dict:
             f'  "confidence": "high|medium|low|unknown",\n'
             f'  "gap_analysis": "string (min 20 chars)",\n'
             f'  "action_bullets": ["3 to 5 strings, each starting with an action verb"],\n'
+            f'  "target_pages": ["absolute URLs on the CLIENT\'S OWN domain that this action '
+            f'changes or creates; [] if the action is not page-level. Never a competitor or '
+            f'third-party URL — those are rejected."],\n'
+            f'  "target_queries": ["the real search queries this action should improve; '
+            f'short buyer-style queries, not the long monitoring prompt"],\n'
+            f'  "action_type": "one of content_update|new_page|schema|ai_access|third_party|'
+            f'measurement|other",\n'
+            f'  "expected_leading_outcome": "the first measurable signal if this works '
+            f'(e.g. AI citations, GSC impressions/clicks)",\n'
+            f'  "expected_business_outcome": "the commercial result it should lead to '
+            f'(e.g. qualified visits, demo requests)",\n'
             f'  "summary": "string",\n'
             f'  "slack_report": "brief slack-formatted summary string"\n'
             f"}}"
@@ -275,10 +273,81 @@ def recommendation_generation(state: ScoutState) -> dict:
                     + f" Abstained evidence sources (no signal above floor): {names}."
                 ).strip()
         result.timeline, result.window_weeks = _timeline(result.confidence, result.probable_cause, result.shift_type)
+
+        # Validate the LLM's claimed targets BEFORE revenue: a page-level revenue category can only
+        # be earned through a client-owned page, so targets must be settled first.
+        _apply_validated_targets(result, client_record)
+
+        rev = _cluster_revenue(
+            cfg, verdict, trigger, client_revenue_bundle,
+            client_sov_now=client_sov_now, financials=fin, target_pages=result.target_pages,
+        )
+        if rev is not None:
+            verdict.revenue_category = rev["revenue_category"]
+
         recommendations.append(_stamp_context(result, cr, fin, wc, rev, client_gaps_lookup.get(trigger.client_id),
                                               client_profile_lookup.get(trigger.client_id)))
 
     return {"recommendations": recommendations}
+
+
+def _apply_validated_targets(rec: Recommendation, client: dict) -> None:
+    """Validate the LLM's claimed targets against the client's own domains, in place.
+
+    Anything not on a client-owned domain is dropped and recorded in target_rejections. A
+    recommendation that ends up `unmapped` is still publishable — it simply cannot be measured, and
+    outcome measurement will skip it rather than measure something unrelated."""
+    validated = apply_targets(
+        {
+            "target_pages": rec.target_pages,
+            "target_queries": rec.target_queries,
+            "action_type": rec.action_type,
+        },
+        client,
+    )
+    rec.target_pages = validated["target_pages"]
+    rec.target_queries = validated["target_queries"]
+    rec.action_type = validated["action_type"]
+    rec.mapping_confidence = validated["mapping_confidence"]
+    rec.target_rejections = validated["target_rejections"]
+    if validated["target_rejections"]:
+        dropped = ", ".join(
+            f"{r['url']} ({r['reason']})" for r in validated["target_rejections"][:5]
+        )
+        print(f"[recommendation_gen] dropped unowned/invalid target pages: {dropped}")
+
+
+def _cluster_revenue(cfg, verdict, trigger, client_revenue_bundle, *, client_sov_now,
+                     financials, target_pages) -> dict | None:
+    """Grade this cluster's revenue evidence, scoped to the recommendation's validated pages.
+
+    Returns None when the revenue layer is off. With no validated target pages there is no
+    page-level linkage, so the category resolves to `unavailable` — correct, not a failure."""
+    if not cfg.revenue_layer_enabled:
+        return None
+    from scout import revenue as R
+    from scout.db.revenue_context import normalize_url
+
+    bundle = client_revenue_bundle.get(trigger.client_id, {})
+    sov_for_rev = {
+        "client_sov_pp": client_sov_now,
+        "primary_competitor_sov_pp": next(
+            (f.get("delta_pp") for f in (verdict.field or [])
+             if f.get("competitor") == verdict.primary_competitor),
+            None,
+        ),
+    }
+    return R.compute_cluster_revenue(
+        demand=bundle.get("demand_by_cluster", {}).get(verdict.cluster_id, {}),
+        financials=financials or {},
+        sov=sov_for_rev,
+        ga4=bundle.get("ga4"),
+        fx_rates=bundle.get("fx_rates"),
+        target_landing_pages={normalize_url(p) for p in target_pages} or None,
+        normalizer=normalize_url,
+        capture_fraction=(cfg.modeled_scenario_capture_fraction
+                          if cfg.modeled_scenario_enabled else None),
+    )
 
 
 def _priority_for_trigger(trigger) -> str:
@@ -390,10 +459,32 @@ def _apply_calibration_feedback(result, cause_accuracy: dict | None) -> str:
     return _nudge_confidence(result.confidence, rate)
 
 
-def _build_evidence_block(trigger, wc, tps, aic, client_sov_now: float | None = None, fin: dict | None = None, cr=None) -> str:
+def _client_site_block(client: dict | None) -> list[str]:
+    """Tell the model which domain it may target. Without this it invents plausible third-party URLs,
+    which the validator then strips — leaving a recommendation that cannot be measured."""
+    owned = sorted(owned_domains(client or {}))
+    if not owned:
+        return [
+            "CLIENT SITE: unknown — no registered domain for this client.",
+            "  Leave target_pages empty; a page you cannot verify as the client's own will be rejected.",
+            "",
+        ]
+    website = ((client or {}).get("company_website") or "").strip()
+    return [
+        "CLIENT SITE (target_pages MUST be on these domains — anything else is dropped):",
+        f"  owned_domains: {', '.join(owned)}",
+        f"  website: {website or 'unknown'}",
+        "  Competitor and third-party URLs are evidence, never targets.",
+        "",
+    ]
+
+
+def _build_evidence_block(trigger, wc, tps, aic, client_sov_now: float | None = None,
+                          fin: dict | None = None, cr=None, client: dict | None = None) -> str:
     """Render a multi-line prompt block summarizing trigger + client state + the FULL evidence from all three sources.
     Adds optional REVENUE CONTEXT and CLIENT READINESS blocks; R0-2 passes evidence uncut (no per-source budget or summarization)."""
     lines = [
+        *_client_site_block(client),
         "TRIGGER DETAILS:",
         f"  competitor: {trigger.competitor_name}",
         f"  cluster: {trigger.cluster_label} ({trigger.cluster_id})",
@@ -459,10 +550,11 @@ def _build_evidence_block(trigger, wc, tps, aic, client_sov_now: float | None = 
 
 
 def _build_deep_evidence_block(verdict, trigger, website_changes, third_party_signals,
-                               ai_citation_changes, client_sov_now, fin, cr, history) -> str:
+                               ai_citation_changes, client_sov_now, fin, cr, history,
+                               client: dict | None = None) -> str:
     # Whole-field, multi-week evidence: client/readiness header + full per-competitor current evidence
     # (full AI-citation, not just delta_summary) + each competitor's trajectory + prior recs/outcomes.
-    lines = [_build_evidence_block(trigger, None, None, None, client_sov_now, fin, cr)]
+    lines = [_build_evidence_block(trigger, None, None, None, client_sov_now, fin, cr, client)]
     lines.append("\nFIELD — every competitor on this cluster this week (full evidence):")
     for f in (verdict.field or []):
         comp = f.get("competitor")

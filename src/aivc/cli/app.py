@@ -2,17 +2,25 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
 
 import typer
 
+from ai_visibility.companies.resolver import resolve_client
 from ai_visibility.config.settings import get_settings
 from ai_visibility.database.validation import check_database
 from aivc.config import get_aivc_settings
 from aivc.database import audit_shared_schema
 from aivc.database.evidence import resolve_latest_evidence_parent
+from aivc.database.executions import (
+    list_executions,
+    load_execution,
+    record_execution,
+    verify_execution,
+)
 from aivc.orchestration import (
     prepare_fresh_report_inputs,
     prepare_historical_report_inputs,
@@ -28,9 +36,13 @@ app = typer.Typer(
 db_app = typer.Typer(help="Validate shared database configuration.")
 citations_app = typer.Typer(help="Run the AI citation producer independently.")
 report_app = typer.Typer(help="Prepare compact Citation + Recon inputs for a client report.")
+execution_app = typer.Typer(
+    help="Record when a recommendation was implemented, so its outcome can be measured."
+)
 app.add_typer(db_app, name="db")
 app.add_typer(citations_app, name="citations")
 app.add_typer(report_app, name="report")
+app.add_typer(execution_app, name="execution")
 
 
 def _print(value: Any) -> None:
@@ -216,6 +228,143 @@ def report_generate(
             )
         )
     _print(_report_result(result))
+
+
+def _execution_json(execution: Any) -> dict[str, Any]:
+    return {
+        "subject_type": execution.subject_type,
+        "subject_id": execution.subject_id,
+        "client_id": str(execution.client_id),
+        "status": execution.status,
+        "implemented_at": execution.implemented_at,
+        "implemented_by": execution.implemented_by,
+        "target_pages": execution.target_pages,
+        "target_queries": execution.target_queries,
+        "action_type": execution.action_type,
+        "verification_status": execution.verification_status,
+        "measurable": execution.is_measurable,
+    }
+
+
+@execution_app.command("record")
+def execution_record(
+    recommendation_id: Annotated[
+        str, typer.Option("--recommendation-id", help="Recommendation this action implements.")
+    ],
+    company: Annotated[str, typer.Option("--company", help="Exact client company name.")],
+    implemented_at: Annotated[
+        datetime | None,
+        typer.Option(
+            "--implemented-at",
+            formats=["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"],
+            help="When the change actually shipped. Required for executed/verified.",
+        ),
+    ] = None,
+    by: Annotated[
+        str | None, typer.Option("--by", help="Who confirmed it, e.g. cs@example.com.")
+    ] = None,
+    status: Annotated[
+        str, typer.Option("--status", help="proposed|accepted|executed|verified|abandoned.")
+    ] = "executed",
+    page: Annotated[
+        list[str] | None,
+        typer.Option("--page", help="Target page actually changed. Repeatable."),
+    ] = None,
+    query: Annotated[
+        list[str] | None, typer.Option("--query", help="Target query. Repeatable.")
+    ] = None,
+    action_type: Annotated[str, typer.Option("--action-type")] = "other",
+    notes: Annotated[str | None, typer.Option("--notes")] = None,
+) -> None:
+    """Record that a recommendation was implemented.
+
+    The implemented_at timestamp is the measurement anchor: outcome windows are counted from it and
+    from nothing else. Recommendations with no execution record are reported as awaiting_execution
+    rather than measured, so growth is never credited to an action that never shipped."""
+
+    def action() -> dict[str, Any]:
+        settings = get_settings()
+        client = resolve_client(settings, company)
+        execution = record_execution(
+            settings,
+            subject_id=recommendation_id,
+            client_id=client.client_id,
+            status=status,
+            implemented_at=implemented_at,
+            implemented_by=by,
+            target_pages=list(page or []),
+            target_queries=list(query or []),
+            action_type=action_type,
+            implementation_notes=notes,
+        )
+        return _execution_json(execution)
+
+    _print(_run(action))
+
+
+@execution_app.command("verify")
+def execution_verify(
+    recommendation_id: Annotated[str, typer.Option("--recommendation-id")],
+    verification: Annotated[
+        str,
+        typer.Option(
+            "--verification", help="unverified|snapshot_confirmed|manual_confirmed."
+        ),
+    ] = "manual_confirmed",
+) -> None:
+    """Confirm a recorded execution. Never invents an implemented_at that was not supplied."""
+    _print(
+        _run(
+            lambda: _execution_json(
+                verify_execution(
+                    get_settings(),
+                    subject_id=recommendation_id,
+                    verification_status=verification,
+                )
+            )
+        )
+    )
+
+
+@execution_app.command("show")
+def execution_show(
+    recommendation_id: Annotated[str, typer.Option("--recommendation-id")],
+) -> None:
+    """Show one execution record, or report that none exists."""
+
+    def action() -> dict[str, Any]:
+        execution = load_execution(get_settings(), subject_id=recommendation_id)
+        if execution is None:
+            return {
+                "subject_id": recommendation_id,
+                "status": "awaiting_execution",
+                "measurable": False,
+            }
+        return _execution_json(execution)
+
+    _print(_run(action))
+
+
+@execution_app.command("list")
+def execution_list(
+    company: Annotated[
+        str | None, typer.Option("--company", help="Restrict to one client.")
+    ] = None,
+    status: Annotated[str | None, typer.Option("--status")] = None,
+) -> None:
+    """List execution records, newest implementation first."""
+
+    def action() -> dict[str, Any]:
+        settings = get_settings()
+        client_id = resolve_client(settings, company).client_id if company else None
+        executions = list_executions(settings, client_id=client_id, status=status)
+        return {
+            "count": len(executions),
+            "measurable": sum(1 for e in executions if e.is_measurable),
+            "executions": [_execution_json(e) for e in executions],
+        }
+
+    _print(_run(action))
 
 
 def main() -> None:

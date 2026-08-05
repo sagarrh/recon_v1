@@ -78,6 +78,16 @@ SCOUT_DECISION_LOG_TABLE = "scout_decision_log"   # TFS-11: per-run triage decis
 # R5-1 REUSES this constant and only appends ADD COLUMN IF NOT EXISTS to scout_outcomes.sql — never re-declares.
 SCOUT_OUTCOMES_TABLE = "scout_outcomes"
 
+# Owned by the aivc CLI (migrations/0008), read here. Carries implemented_at — the ONLY legitimate
+# anchor for an outcome window. Same Supabase project, so PostgREST reaches it like any other table.
+AIVC_ACTION_EXECUTIONS_TABLE = "aivc_action_executions"
+AIVC_EXECUTION_READ_COLS = [
+    "subject_id", "client_id", "status", "implemented_at", "implemented_by",
+    "target_pages", "target_queries", "action_type", "verification_status",
+]
+# Statuses that mean the change actually shipped. Anything else is not measurable.
+EXECUTED_STATUSES = ("executed", "verified")
+
 # R1-1: sync_state heartbeat written per-stream by the scout-sync edge fn (R1-2); read by the reader's freshness gate.
 SYNC_STATE_TABLE = "sync_state"
 SYNC_STATE_COLS = {

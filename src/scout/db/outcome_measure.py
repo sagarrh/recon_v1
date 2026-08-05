@@ -1,16 +1,27 @@
-# outcome_measure.py — Deterministic weekly SOV outcome measurement for shipped recommendations (no LLM).
-# Purpose: For each recommendation whose timeline window has elapsed, measure current cluster SOV vs the frozen R1-5 baseline and record the delta/recovery into scout_outcomes (in place).
-# Scope: Pure compute over Supabase (recommendations + scout_outcomes + decision_log) and load_data(); upserts measurement columns onto the existing 'proposed' rows. No OpenRouter / no LLM.
-# Consumers: scripts/weekly_run.py invokes run_outcome_measurement after a completed live run; not part of the LangGraph pipeline.
+# outcome_measure.py — Deterministic outcome measurement for EXECUTED recommendations (no LLM).
+# Purpose: For each recommendation with a confirmed implemented_at whose window has since elapsed,
+#          measure current cluster SOV vs the frozen baseline and record the delta into scout_outcomes.
+# Scope: Pure compute over Supabase (recommendations + scout_outcomes + aivc_action_executions +
+#        decision_log) and load_data(); upserts measurement columns in place. No OpenRouter / no LLM.
+# Consumers: scripts/weekly_run.py invokes run_outcome_measurement after a completed live run.
+#
+# The measurement window is anchored on aivc_action_executions.implemented_at — never on the
+# recommendation's own week_date. Anchoring on the report date would measure growth that followed a
+# REPORT and present it as the effect of an ACTION, which is the claim this module must never make.
+# A recommendation with no execution record is counted as awaiting execution and is not measured.
 import logging
 from datetime import date, timedelta
 
 from scout.db import sed_mapping as m
+from scout.db.executions import is_measurable, load_executions
 from scout.utils import now_iso as _now_iso
 from scout.utils import parse_date as _parse_date
 
 log = logging.getLogger(__name__)
 
+# LEGACY fallback only. Recommendation.window_weeks is the structured primary and is preferred
+# below; this map exists solely for rows written before that field existed. Do not extend it —
+# matching an LLM's exact prose is not a contract worth keeping. Delete once legacy rows have aged out.
 # Exact prose strings emitted by recommendation_gen._timeline → conservative UPPER bound of the week window.
 _TIMELINE_WINDOW_WEEKS = {
     "monitoring next cycle — no timeline until cause is identified": 6,
@@ -112,6 +123,71 @@ def _measure_revenue(sb, outcome_row: dict) -> tuple[float | None, str]:
         return None, "unavailable"
 
 
+def _measure_one(sb, r: dict, execution: dict, timelines: dict, sov_idx: dict,
+                 today: date) -> dict | None:
+    """Measure one executed recommendation, or None when its window has not elapsed yet.
+
+    The caller has already established that `execution` carries a real implemented_at — this
+    function never falls back to the recommendation's own date."""
+    implemented_on = _parse_date(execution.get("implemented_at"))
+    if implemented_on is None:
+        return None
+
+    tl = timelines.get(r.get("recommendation_id")) or {}
+    window_weeks = tl.get("window_weeks")
+    if window_weeks is None:
+        window_weeks = _window_weeks_from_timeline(tl.get("timeline", ""))
+    window_elapsed_at = implemented_on + timedelta(weeks=window_weeks)
+    if window_elapsed_at > today:
+        return None  # window not yet elapsed — measure on a later run
+
+    baseline = r.get("baseline_client_sov_pp")
+    current = sov_idx.get((r.get("client_id"), r.get("cluster_id")))
+    delta = (current - baseline) if (current is not None and baseline is not None) else None
+
+    # Prefer the pages frozen at execution time over the recommendation's current ones: what we
+    # measure must be what was actually changed, even if the recommendation was edited since.
+    measurement_row = dict(r)
+    if execution.get("target_pages"):
+        measurement_row["target_pages"] = execution["target_pages"]
+    rev_current, rev_category = _measure_revenue(sb, measurement_row)
+
+    rev_delta = None
+    if rev_current is not None and r.get("baseline_revenue_usd") is not None:
+        try:
+            from scout import revenue as R
+            rev_delta = R.delta_revenue(
+                baseline_revenue=r.get("baseline_revenue_usd"),
+                current_revenue=rev_current,
+            )
+        except Exception as e:
+            log.warning("[outcome_measure] revenue delta failed for %s: %s",
+                        r.get("recommendation_id"), e)
+
+    return {
+        "recommendation_id": r.get("recommendation_id"),
+        "run_id": r.get("run_id"),
+        "client_id": r.get("client_id"),
+        "cluster_id": r.get("cluster_id"),
+        "competitor_name": r.get("baseline_primary_competitor"),
+        "window_weeks": window_weeks,
+        "window_elapsed_at": str(window_elapsed_at),
+        "current_client_sov_pp": current,
+        "sov_delta_pp": delta,
+        "recovered": (delta >= 0) if delta is not None else None,
+        # No longer unknown: this row is only reached with a confirmed execution record.
+        "executed": True,
+        "execution_status": str(execution.get("status") or "executed"),
+        "implemented_at": execution.get("implemented_at"),
+        "target_pages": measurement_row.get("target_pages") or [],
+        "field": _decision_field(sb, r.get("run_id"), r.get("cluster_id")),
+        "measured_at": _now_iso(),
+        "current_revenue_usd": rev_current,
+        "revenue_delta_usd": rev_delta,
+        "revenue_category": rev_category,
+    }
+
+
 def run_outcome_measurement(sb, today: date) -> int:
     """Measure SOV outcomes in place for every shipped recommendation whose timeline window has elapsed (deterministic, no LLM).
     Reads the FROZEN R1-5 baseline, computes current client-cluster SOV via load_data(), and upserts sov_delta_pp/recovered onto the existing scout_outcomes row."""
@@ -126,58 +202,28 @@ def run_outcome_measurement(sb, today: date) -> int:
 
     rec_ids = [r.get("recommendation_id") for r in rows if r.get("recommendation_id")]
     timelines = _fetch_timelines(sb, rec_ids)
+    executions = load_executions(sb, rec_ids)
     sov_idx = _current_client_sov_index()
 
     updates = []
+    awaiting = 0
     for r in rows:
-        wd = _parse_date(r.get("week_date"))
-        if wd is None:
+        execution = executions.get(str(r.get("recommendation_id")))
+        # THE anchor. A recommendation nobody confirmed shipping is not measured at all: measuring
+        # from its own week_date would report that SOV moved after we SPOKE, and silently present
+        # that as the effect of an action that may never have happened.
+        if not is_measurable(execution):
+            awaiting += 1
             continue
-        tl = timelines.get(r.get("recommendation_id")) or {}
-        window_weeks = tl.get("window_weeks")
-        if window_weeks is None:
-            window_weeks = _window_weeks_from_timeline(tl.get("timeline", ""))
-        window_elapsed_at = wd + timedelta(weeks=window_weeks)
-        if window_elapsed_at > today:
-            continue  # window not yet elapsed — measure on a later run
+        update = _measure_one(sb, r, execution, timelines, sov_idx, today)
+        if update is not None:
+            updates.append(update)
 
-        baseline = r.get("baseline_client_sov_pp")
-        current = sov_idx.get((r.get("client_id"), r.get("cluster_id")))
-        delta = (current - baseline) if (current is not None and baseline is not None) else None
-        recovered = (delta >= 0) if delta is not None else None
-
-        rev_current, rev_category = _measure_revenue(sb, r)
-
-        rev_delta = None
-        if rev_current is not None and r.get("baseline_revenue_usd") is not None:
-            try:
-                from scout import revenue as R
-                rev_delta = R.delta_revenue(
-                    baseline_revenue=r.get("baseline_revenue_usd"),
-                    current_revenue=rev_current,
-                )
-            except Exception as e:
-                log.warning("[outcome_measure] revenue delta failed for %s: %s", r.get("recommendation_id"), e)
-
-        updates.append({
-            "recommendation_id": r.get("recommendation_id"),
-            "run_id": r.get("run_id"),
-            "client_id": r.get("client_id"),
-            "cluster_id": r.get("cluster_id"),
-            "competitor_name": r.get("baseline_primary_competitor"),
-            "window_weeks": window_weeks,
-            "window_elapsed_at": str(window_elapsed_at),
-            "current_client_sov_pp": current,
-            "sov_delta_pp": delta,
-            "recovered": recovered,
-            "executed": None,   # unknown without analyst signal (R5-2 filters on it); never fabricate
-            "field": _decision_field(sb, r.get("run_id"), r.get("cluster_id")),
-            "measured_at": _now_iso(),
-            "current_revenue_usd": rev_current,
-            "revenue_delta_usd": rev_delta,
-            "revenue_category": rev_category,
-        })
-
+    if awaiting:
+        log.info(
+            "[outcome_measure] %d outcome row(s) awaiting execution — no implemented_at recorded, "
+            "so nothing was measured for them", awaiting,
+        )
     if not updates:
         return 0
     try:

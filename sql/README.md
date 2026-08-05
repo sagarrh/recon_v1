@@ -22,6 +22,11 @@ Scout's write-side tables live in Supabase and are **not** managed by this repos
 migration runner. Changes to them ship here as numbered, idempotent, additive SQL that an
 operator applies by hand against the Supabase project.
 
+Apply in order; each states its prerequisite and its own preflight query.
+
 - `0200_recon_revenue_categories.sql` — replaces the SOV-derived revenue estimate with
   evidence-graded revenue categories. **Must be applied before the next live Recon run**;
   without it the recommendation and outcome writers fail on unknown columns.
+- `0201_recon_recommendation_targets.sql` — adds the measurement grain to `recommendations`
+  (`target_pages`, `target_queries`, `action_type`, `mapping_confidence`). Requires 0200.
+  Without it the recommendation writer fails on unknown columns.

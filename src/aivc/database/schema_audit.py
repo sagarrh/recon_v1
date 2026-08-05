@@ -71,6 +71,12 @@ TABLE_REQUIREMENTS: dict[str, frozenset[str]] = {
             "revenue_value_usd",
             "revenue_currency",
             "revenue_limitations",
+            # sql/0201 — the measurement grain. Without these an outcome has
+            # nothing to measure against.
+            "target_pages",
+            "target_queries",
+            "action_type",
+            "mapping_confidence",
         }
     ),
     "reports": frozenset(

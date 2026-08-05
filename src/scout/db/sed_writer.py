@@ -336,6 +336,13 @@ def _write_recommendations(sb, state: ScoutState, client_ids: dict[str, str], in
             "revenue_currency": d.get("revenue_currency", "USD"),
             "revenue_limitations": d.get("revenue_limitations") or [],
             "revenue_inputs": _to_jsonable(d.get("revenue_inputs")),
+            "target_pages": d.get("target_pages") or [],
+            "target_queries": d.get("target_queries") or [],
+            "action_type": d.get("action_type", "other"),
+            "mapping_confidence": d.get("mapping_confidence", "unmapped"),
+            "target_rejections": _to_jsonable(d.get("target_rejections")) or [],
+            "expected_leading_outcome": d.get("expected_leading_outcome") or "",
+            "expected_business_outcome": d.get("expected_business_outcome") or "",
         })
     if not rows:
         return {}
@@ -468,6 +475,9 @@ def _write_outcomes(sb, state: ScoutState, client_ids: dict[str, str], rec_id_ma
             "baseline_snapshot_at": snapshot_at,
             "baseline_revenue_usd": d.get("revenue_value_usd"),
             "baseline_revenue_category": d.get("revenue_category", "unavailable"),
+            # Frozen at ship time so outcome measurement scopes GA4 to the pages this
+            # recommendation actually claimed, even if the recommendation is edited later.
+            "target_pages": d.get("target_pages") or [],
         })
     if not rows:
         return 0
