@@ -32,6 +32,12 @@ class AivcSettings(BaseSettings):
     aivc_delivery_mode: str = Field(default="configured", pattern="^(configured|disabled)$")
     aivc_stage_lease_seconds: int = Field(default=900, ge=30, le=86_400)
     aivc_bundle_output_dir: Path = Path("./output")
+    aivc_measurement_gsc_max_lag_days: int = Field(default=4, ge=0, le=30)
+    aivc_measurement_ga4_max_lag_days: int = Field(default=3, ge=0, le=30)
+    aivc_measurement_baseline_days: int = Field(default=28, ge=7, le=180)
+    aivc_measurement_stabilization_days: int = Field(default=7, ge=0, le=90)
+    aivc_measurement_follow_up_days: int = Field(default=28, ge=7, le=180)
+    aivc_measurement_max_source_rows: int = Field(default=100_000, ge=1_000, le=1_000_000)
 
     def require_database_url(self) -> str:
         if self.database_url is None or not self.database_url.get_secret_value().strip():

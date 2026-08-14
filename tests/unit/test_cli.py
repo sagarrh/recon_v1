@@ -53,3 +53,12 @@ def test_final_report_cli_has_one_detailed_client_product() -> None:
     assert "--profile" not in result.output
     assert "--audience" not in result.output
     assert "--refresh-data" in result.output
+
+
+def test_measurement_cli_exposes_readiness_and_lifecycle_commands() -> None:
+    result = CliRunner().invoke(aivc_app, ["measurement", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "check" in result.output
+    assert "start" in result.output
+    assert "run" in result.output
+    assert "status" in result.output

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 from uuid import UUID
@@ -11,8 +12,18 @@ import typer
 from ai_visibility.config.settings import get_settings
 from ai_visibility.database.validation import check_database
 from aivc.config import get_aivc_settings
-from aivc.database import audit_shared_schema
+from aivc.database import audit_measurement_foundation, audit_shared_schema
 from aivc.database.evidence import resolve_latest_evidence_parent
+from aivc.measurement.models import (
+    StartMeasurementRequest,
+    SubjectType,
+    VerificationStatus,
+)
+from aivc.measurement.repository import (
+    measurement_plan_status,
+    run_measurement_plan,
+    start_measurement,
+)
 from aivc.orchestration import (
     prepare_fresh_report_inputs,
     prepare_historical_report_inputs,
@@ -28,9 +39,11 @@ app = typer.Typer(
 db_app = typer.Typer(help="Validate shared database configuration.")
 citations_app = typer.Typer(help="Run the AI citation producer independently.")
 report_app = typer.Typer(help="Prepare compact Citation + Recon inputs for a client report.")
+measurement_app = typer.Typer(help="Validate and measure GSC/GA4 outcomes for ReconV1 actions.")
 app.add_typer(db_app, name="db")
 app.add_typer(citations_app, name="citations")
 app.add_typer(report_app, name="report")
+app.add_typer(measurement_app, name="measurement")
 
 
 def _print(value: Any) -> None:
@@ -60,6 +73,130 @@ def db_check() -> None:
 def db_audit() -> None:
     """Read-only audit of citation and Recon tables, identity, and freshness."""
     _print(_run(lambda: audit_shared_schema(get_settings())))
+
+
+@measurement_app.command("check")
+def measurement_check(
+    company: Annotated[
+        str | None, typer.Option("--company", help="Exact client company name.")
+    ] = None,
+    client_id: Annotated[
+        UUID | None, typer.Option("--client-id", help="Exact authoritative client UUID.")
+    ] = None,
+) -> None:
+    """Read-only readiness audit for one client's mirrored GSC and GA4 data."""
+    if (company is None) == (client_id is None):
+        raise typer.BadParameter("Provide exactly one of --company or --client-id.")
+    cfg = get_aivc_settings()
+    result = _run(
+        lambda: audit_measurement_foundation(
+            get_settings(),
+            client_id=client_id,
+            company_name=company,
+            gsc_max_lag_days=cfg.aivc_measurement_gsc_max_lag_days,
+            ga4_max_lag_days=cfg.aivc_measurement_ga4_max_lag_days,
+        )
+    )
+    _print(result.model_dump(mode="json"))
+
+
+@measurement_app.command("start")
+def measurement_start(
+    client_id: Annotated[
+        UUID, typer.Option("--client-id", help="Exact authoritative client UUID.")
+    ],
+    subject_type: Annotated[
+        SubjectType,
+        typer.Option("--subject-type", help="Implemented recommendation or citation signal."),
+    ],
+    subject_id: Annotated[
+        str, typer.Option("--subject-id", help="Exact persisted recommendation/signal UUID.")
+    ],
+    implemented_at: Annotated[
+        datetime,
+        typer.Option("--implemented-at", help="Timezone-aware implementation timestamp."),
+    ],
+    implemented_by: Annotated[
+        str,
+        typer.Option("--implemented-by", help="Person or system confirming implementation."),
+    ],
+    target_page: Annotated[
+        list[str] | None,
+        typer.Option("--target-page", help="Exact affected page; repeat for multiple pages."),
+    ] = None,
+    target_query: Annotated[
+        list[str] | None,
+        typer.Option("--target-query", help="Exact affected GSC query; repeat as needed."),
+    ] = None,
+    evidence_url: Annotated[
+        list[str] | None,
+        typer.Option("--evidence-url", help="Implementation evidence URL; repeat as needed."),
+    ] = None,
+    action_type: Annotated[
+        str, typer.Option("--action-type", help="Implemented action classification.")
+    ] = "other",
+    verification_status: Annotated[
+        VerificationStatus,
+        typer.Option("--verification-status", help="How implementation was confirmed."),
+    ] = VerificationStatus.manual_confirmed,
+    implementation_notes: Annotated[
+        str | None, typer.Option("--notes", help="Optional implementation notes.")
+    ] = None,
+    require_ga4: Annotated[
+        bool,
+        typer.Option("--require-ga4", help="Make GA4 a required rather than optional source."),
+    ] = False,
+) -> None:
+    """Register a verified action and create fixed measurement windows."""
+    cfg = get_aivc_settings()
+    request = _run(
+        lambda: StartMeasurementRequest(
+            client_id=client_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            implemented_at=implemented_at,
+            implemented_by=implemented_by,
+            verification_status=verification_status,
+            action_type=action_type,
+            target_pages=target_page or [],
+            target_queries=target_query or [],
+            evidence_urls=evidence_url or [],
+            implementation_notes=implementation_notes,
+            baseline_days=cfg.aivc_measurement_baseline_days,
+            stabilization_days=cfg.aivc_measurement_stabilization_days,
+            follow_up_days=cfg.aivc_measurement_follow_up_days,
+            require_ga4=require_ga4,
+        )
+    )
+    result = _run(lambda: start_measurement(get_settings(), cfg, request))
+    _print(result.model_dump(mode="json"))
+
+
+@measurement_app.command("run")
+def measurement_run(
+    plan_id: Annotated[UUID, typer.Option("--plan-id", help="Measurement plan UUID.")],
+    as_of: Annotated[
+        str | None,
+        typer.Option("--as-of", help="Optional ISO date (YYYY-MM-DD) for controlled backfills."),
+    ] = None,
+) -> None:
+    """Capture eligible windows and evaluate the plan when evidence is ready."""
+    parsed_as_of = _run(lambda: date.fromisoformat(as_of)) if as_of else None
+    _print(
+        _run(
+            lambda: run_measurement_plan(
+                get_settings(), get_aivc_settings(), plan_id=plan_id, as_of=parsed_as_of
+            )
+        )
+    )
+
+
+@measurement_app.command("status")
+def measurement_status(
+    plan_id: Annotated[UUID, typer.Option("--plan-id", help="Measurement plan UUID.")],
+) -> None:
+    """Show compact plan, snapshot, and outcome status without raw source rows."""
+    _print(_run(lambda: measurement_plan_status(get_settings(), plan_id=plan_id)))
 
 
 @citations_app.command("generate")

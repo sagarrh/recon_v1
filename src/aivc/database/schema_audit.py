@@ -58,18 +58,82 @@ TABLE_REQUIREMENTS: dict[str, frozenset[str]] = {
     "investigations": frozenset(
         {"run_id", "trigger_key", "client_id", "cluster_id", "ai_citation_changes"}
     ),
-    "recommendations": frozenset(
-        {"run_id", "client_id", "cluster_id", "validation_status"}
-    ),
-    "reports": frozenset(
-        {"run_id", "recommendation_id", "client_id", "validation_status"}
-    ),
+    "recommendations": frozenset({"run_id", "client_id", "cluster_id", "validation_status"}),
+    "reports": frozenset({"run_id", "recommendation_id", "client_id", "validation_status"}),
     "blog_detections": frozenset({"run_id", "client_id", "url"}),
-    "scout_decision_log": frozenset(
-        {"run_id", "client_id", "cluster_id", "noise", "field"}
-    ),
+    "scout_decision_log": frozenset({"run_id", "client_id", "cluster_id", "noise", "field"}),
     "scout_outcomes": frozenset({"recommendation_id", "run_id", "client_id"}),
     "prompt_log": frozenset({"run_id", "node", "model", "total_tokens"}),
+    "sync_state": frozenset({"table_name", "last_synced_at", "status", "updated_at"}),
+    "user_metrics": frozenset({"client_id", "gsc_site_url", "ga4_property_id"}),
+    "gsc_query_page_metrics": frozenset(
+        {
+            "id",
+            "site_url",
+            "metric_date",
+            "query",
+            "page",
+            "clicks",
+            "impressions",
+            "ctr",
+            "position",
+        }
+    ),
+    "ga4_metrics": frozenset(
+        {
+            "id",
+            "property_id",
+            "metric_date",
+            "landing_page",
+            "sessions",
+            "engaged_sessions",
+            "conversions",
+            "revenue",
+        }
+    ),
+    "aivc_action_executions": frozenset(
+        {
+            "id",
+            "client_id",
+            "subject_type",
+            "subject_id",
+            "status",
+            "implemented_at",
+            "target_pages",
+            "target_queries",
+        }
+    ),
+    "ai_visibility_measurement_plans": frozenset(
+        {
+            "id",
+            "idempotency_key",
+            "client_id",
+            "subject_type",
+            "subject_id",
+            "baseline_start",
+            "baseline_end",
+            "follow_up_start",
+            "follow_up_end",
+            "status",
+        }
+    ),
+    "ai_visibility_measurement_snapshots": frozenset(
+        {"id", "plan_id", "source", "window_type", "metrics", "source_status", "payload_checksum"}
+    ),
+    "ai_visibility_measurement_outcomes": frozenset(
+        {
+            "id",
+            "plan_id",
+            "classification",
+            "confidence",
+            "gsc_deltas",
+            "ga4_deltas",
+            "revenue_category",
+            "recorded_revenue",
+            "observed_revenue_delta",
+            "currency_code",
+        }
+    ),
 }
 
 RECON_WRITE_TABLES = frozenset(
@@ -84,6 +148,10 @@ RECON_WRITE_TABLES = frozenset(
         "scout_decision_log",
         "scout_outcomes",
         "prompt_log",
+        "aivc_action_executions",
+        "ai_visibility_measurement_plans",
+        "ai_visibility_measurement_snapshots",
+        "ai_visibility_measurement_outcomes",
     }
 )
 
@@ -97,6 +165,11 @@ RECON_UPSERT_TARGETS: dict[str, frozenset[str]] = {
     "blog_detections": frozenset({"run_id", "url"}),
     "scout_decision_log": frozenset({"run_id", "client_id", "cluster_id"}),
     "scout_outcomes": frozenset({"recommendation_id"}),
+    "ai_visibility_measurement_plans": frozenset({"idempotency_key"}),
+    "ai_visibility_measurement_outcomes": frozenset({"plan_id"}),
+    "ai_visibility_measurement_snapshots": frozenset(
+        {"plan_id", "source", "window_type", "payload_checksum"}
+    ),
 }
 
 

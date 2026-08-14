@@ -30,6 +30,9 @@ Start with the [`Operations Guide`](docs/guides/OPERATIONS_GUIDE.md). Local
 design references and the reusable manual-report prompt live under
 `output/docs/` and are intentionally not committed.
 
+For post-implementation outcome tracking, see the
+[`ReconV1 GSC and GA4 Measurement Guide`](docs/guides/GSC_GA4_MEASUREMENT.md).
+
 ## Non-negotiable product rules
 
 - User input is **client company name only**.
